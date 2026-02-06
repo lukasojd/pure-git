@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\Infrastructure\Transport;
 
+use Generator;
 use Lukasojd\PureGit\Domain\Exception\PureGitException;
-use Lukasojd\PureGit\Domain\Object\GitObject;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\ObjectType;
 use Lukasojd\PureGit\Domain\Ref\RefName;
@@ -55,9 +55,12 @@ final readonly class LocalTransport implements TransportInterface
     public function fetchPack(array $wants, array $haves = []): string
     {
         $objectStorage = $this->createRemoteObjectStorage();
-        $rawObjects = $this->collectRawObjects($objectStorage, $wants, $haves);
 
-        return $this->serializeRawPack($rawObjects);
+        // Two-pass: first collect IDs, then stream-serialize
+        $ids = $this->collectObjectIds($objectStorage, $wants, $haves);
+        $count = count($ids);
+
+        return $this->serializePack($this->yieldRawObjects($objectStorage, $ids), $count);
     }
 
     public function sendPack(string $packData, string $refUpdates): string
@@ -75,16 +78,15 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * Collect raw objects using BFS with SplQueue for O(1) dequeue.
-     * Stores RawObject instead of deserialized GitObject to avoid memory overhead.
+     * BFS to collect all reachable object IDs without loading full object data.
      *
      * @param list<ObjectId> $wants
      * @param list<ObjectId> $haves
-     * @return list<array{type: ObjectType, data: string}>
+     * @return list<ObjectId>
      */
-    private function collectRawObjects(CombinedObjectStorage $objectStorage, array $wants, array $haves): array
+    private function collectObjectIds(CombinedObjectStorage $objectStorage, array $wants, array $haves): array
     {
-        $toSend = [];
+        $ids = [];
         $seen = [];
         $haveSet = [];
 
@@ -109,15 +111,25 @@ final readonly class LocalTransport implements TransportInterface
                 continue;
             }
 
+            $ids[] = $id;
             $raw = $objectStorage->readRaw($id);
-            $toSend[] = [
-                'type' => $raw->type,
-                'data' => $raw->data,
-            ];
             $this->enqueueFromRaw($raw, $queue);
         }
 
-        return $toSend;
+        return $ids;
+    }
+
+    /**
+     * Yield raw objects one at a time using a generator for memory efficiency.
+     *
+     * @param list<ObjectId> $ids
+     * @return Generator<int, RawObject>
+     */
+    private function yieldRawObjects(CombinedObjectStorage $objectStorage, array $ids): Generator
+    {
+        foreach ($ids as $id) {
+            yield $objectStorage->readRaw($id);
+        }
     }
 
     /**
@@ -175,23 +187,25 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * @param list<array{type: ObjectType, data: string}> $rawObjects
+     * Serialize objects into a pack format, consuming generator one at a time.
+     *
+     * @param Generator<int, RawObject> $objects
      */
-    private function serializeRawPack(array $rawObjects): string
+    private function serializePack(Generator $objects, int $count): string
     {
-        $header = 'PACK' . pack('N', 2) . pack('N', count($rawObjects));
+        $header = 'PACK' . pack('N', 2) . pack('N', $count);
         $chunks = [$header];
 
-        foreach ($rawObjects as $obj) {
-            $type = match ($obj['type']) {
+        foreach ($objects as $raw) {
+            $type = match ($raw->type) {
                 ObjectType::Commit => 1,
                 ObjectType::Tree => 2,
                 ObjectType::Blob => 3,
                 ObjectType::Tag => 4,
             };
 
-            $chunks[] = $this->encodeObjectHeader($type, strlen($obj['data']));
-            $compressed = gzcompress($obj['data']);
+            $chunks[] = $this->encodeObjectHeader($type, strlen($raw->data));
+            $compressed = gzcompress($raw->data);
             $chunks[] = $compressed !== false ? $compressed : '';
         }
 

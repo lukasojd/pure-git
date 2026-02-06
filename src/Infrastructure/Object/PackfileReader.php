@@ -162,7 +162,7 @@ final class PackfileReader
         $totalSize = 0;
 
         while ($totalSize < $expectedSize) {
-            $chunkSize = min(65536, $expectedSize - $totalSize + 512);
+            $chunkSize = max(1, min(65536, $expectedSize - $totalSize + 512));
             $compressed = fread($handle, $chunkSize);
             if ($compressed === false || $compressed === '') {
                 throw new InvalidObjectException('Unexpected end of compressed data');

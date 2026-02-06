@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+ini_set('memory_limit', '512M');
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Lukasojd\PureGit\Application\Handler\CheckoutHandler;
@@ -210,33 +211,14 @@ bench('10. Read all blobs from HEAD tree', function () use ($repo, $headCommit) 
     return sprintf('(%d files, %d KB)', $count, $totalSize / 1024);
 });
 
-// 11. Fetch pack (shallow: last 5 commits only)
-bench('11. Fetch pack (5 commits deep)', function () use ($repo, $headId) {
+// 11. Fetch pack (shallow: last 2 commits only)
+bench('11. Fetch pack (2 commits deep)', function () use ($repo, $headId) {
     $transport = new LocalTransport('/private/tmp/pure-git-clone');
 
-    $seen = [];
-    $queue = [$headId];
-    $commits = [];
-    while ($queue !== [] && count($commits) < 5) {
-        $id = array_shift($queue);
-        if (isset($seen[$id->hash])) {
-            continue;
-        }
-        $seen[$id->hash] = true;
-        $commit = $repo->objects->read($id);
-        assert($commit instanceof Commit);
-        $commits[] = $id;
-        foreach ($commit->parents as $parent) {
-            $queue[] = $parent;
-        }
-    }
+    $headCommit2 = $repo->objects->read($headId);
+    assert($headCommit2 instanceof Commit);
 
-    $haves = [];
-    if (count($commits) >= 5) {
-        $lastCommit = $repo->objects->read($commits[count($commits) - 1]);
-        assert($lastCommit instanceof Commit);
-        $haves = $lastCommit->parents;
-    }
+    $haves = $headCommit2->parents;
 
     $packData = $transport->fetchPack([$headId], $haves);
     return sprintf('(%d KB pack)', strlen($packData) / 1024);
@@ -252,6 +234,46 @@ bench('12. Resolve 50 tags', function () use ($repo, $refs) {
     }
     return sprintf('(%d tags)', $count);
 });
+
+// 13. Delta encoding benchmark: pack write with/without delta
+echo "\n--- Delta Encoding Benchmark ---\n";
+
+bench('13a. Create 50 similar blobs', function () use (&$testBlobs) {
+    $testBlobs = [];
+    $baseContent = str_repeat("This is a shared line of content that repeats across objects.\n", 100);
+    for ($i = 0; $i < 50; $i++) {
+        $testBlobs[] = new \Lukasojd\PureGit\Domain\Object\Blob($baseContent . sprintf("Unique variation line %d\n", $i));
+    }
+    return sprintf('(%d blobs, %.1f KB each)', count($testBlobs), strlen($testBlobs[0]->serialize()) / 1024);
+});
+
+$noDeltaPath = sys_get_temp_dir() . '/bench-nodelta-' . getmypid() . '.pack';
+$deltaPath = sys_get_temp_dir() . '/bench-delta-' . getmypid() . '.pack';
+
+bench('13b. Pack write (no delta)', function () use ($testBlobs, $noDeltaPath) {
+    $writer = new \Lukasojd\PureGit\Infrastructure\Object\PackfileWriter();
+    $config = new \Lukasojd\PureGit\Infrastructure\Object\PackWriterConfig(enableDelta: false);
+    $writer->write($testBlobs, $noDeltaPath, $config);
+    return sprintf('(%d KB)', filesize($noDeltaPath) / 1024);
+});
+
+bench('13c. Pack write (with delta)', function () use ($testBlobs, $deltaPath) {
+    $writer = new \Lukasojd\PureGit\Infrastructure\Object\PackfileWriter();
+    $config = new \Lukasojd\PureGit\Infrastructure\Object\PackWriterConfig(enableDelta: true);
+    $writer->write($testBlobs, $deltaPath, $config);
+    return sprintf('(%d KB)', filesize($deltaPath) / 1024);
+});
+
+$noDeltaSize = filesize($noDeltaPath);
+$deltaSize = filesize($deltaPath);
+if ($noDeltaSize > 0 && $deltaSize > 0) {
+    $ratio = $deltaSize / $noDeltaSize * 100;
+    printf("  Delta compression ratio: %.1f%% (%.1f KB -> %.1f KB, saved %.1f KB)\n",
+        $ratio, $noDeltaSize / 1024, $deltaSize / 1024, ($noDeltaSize - $deltaSize) / 1024);
+}
+
+@unlink($noDeltaPath);
+@unlink($deltaPath);
 
 echo "\n" . str_repeat('-', 90) . "\n";
 printf("Peak memory: %.1f MB\n", memory_get_peak_usage(true) / 1024 / 1024);
