@@ -88,13 +88,13 @@ final class PushCommand implements CliCommand
 
     private function printResult(PushResult $result): void
     {
-        fwrite(STDERR, sprintf("To %s\n", $result->remoteUrl));
-
         if ($result->upToDate) {
-            fwrite(STDOUT, "Everything up-to-date\n");
+            fwrite(STDERR, "Everything up-to-date\n");
 
             return;
         }
+
+        fwrite(STDERR, sprintf("To %s\n", $result->remoteUrl));
 
         foreach ($result->refUpdates as $update) {
             $this->printRefUpdate($update);

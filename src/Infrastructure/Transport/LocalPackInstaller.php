@@ -79,8 +79,23 @@ final readonly class LocalPackInstaller
         fwrite($stream, $refUpdateLines);
         fseek($stream, 0);
 
-        while (($line = PktLine::read($stream)) !== null) {
-            $line = rtrim($line, "\n");
+        while (! feof($stream)) {
+            $lenHex = fread($stream, 4);
+            if ($lenHex === false || strlen($lenHex) < 4) {
+                break;
+            }
+
+            $len = intval($lenHex, 16);
+            if ($len <= 4) {
+                break;
+            }
+
+            $payload = fread($stream, $len - 4);
+            if ($payload === false) {
+                break;
+            }
+
+            $line = rtrim($payload, "\n");
             if ($line === '') {
                 continue;
             }
