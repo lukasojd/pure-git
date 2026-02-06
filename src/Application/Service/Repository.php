@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\Application\Service;
 
+use Lukasojd\PureGit\Domain\CommitGraph\CommitGraphInterface;
 use Lukasojd\PureGit\Domain\Exception\RepositoryException;
 use Lukasojd\PureGit\Domain\Repository\IndexStorageInterface;
 use Lukasojd\PureGit\Domain\Repository\ObjectStorageInterface;
 use Lukasojd\PureGit\Domain\Repository\RefStorageInterface;
 use Lukasojd\PureGit\Infrastructure\Cache\ObjectCache;
+use Lukasojd\PureGit\Infrastructure\CommitGraph\CommitGraphReader;
 use Lukasojd\PureGit\Infrastructure\Filesystem\FilesystemInterface;
 use Lukasojd\PureGit\Infrastructure\Filesystem\LocalFilesystem;
 use Lukasojd\PureGit\Infrastructure\Index\IndexFileHandler;
@@ -26,6 +28,8 @@ final readonly class Repository
 
     public FilesystemInterface $filesystem;
 
+    public ?CommitGraphInterface $commitGraph;
+
     private function __construct(
         public string $workDir,
         public string $gitDir
@@ -37,6 +41,7 @@ final readonly class Repository
         $this->objects = new CombinedObjectStorage($looseStorage, $this->gitDir . '/objects', $cache);
         $this->refs = new FileRefStorage($this->gitDir);
         $this->index = new IndexFileHandler($this->gitDir . '/index');
+        $this->commitGraph = $this->loadCommitGraph();
     }
 
     public static function init(string $path): self
@@ -98,6 +103,20 @@ final readonly class Repository
                 throw RepositoryException::notARepository($startPath);
             }
             $current = $parent;
+        }
+    }
+
+    private function loadCommitGraph(): ?CommitGraphInterface
+    {
+        $graphPath = $this->gitDir . '/objects/info/commit-graph';
+        if (! file_exists($graphPath)) {
+            return null;
+        }
+
+        try {
+            return new CommitGraphReader($graphPath);
+        } catch (\Throwable) {
+            return null;
         }
     }
 }
