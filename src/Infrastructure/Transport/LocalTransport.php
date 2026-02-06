@@ -102,12 +102,14 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * BFS to collect all object IDs reachable from the given roots.
+     * Build the have set using two complementary walks:
      *
-     * Optimization: blob hashes are extracted directly from tree entries
-     * without reading the blob data. Only commits and trees are read from
-     * storage. This reduces I/O from O(commits + trees + blobs) to
-     * O(commits + trees), skipping thousands of blob reads on large repos.
+     * 1. Commit ancestry walk: follow parent chains (commits only, no trees)
+     *    to catch merge paths the want-side BFS might follow. Limited to
+     *    MAX_HAVE_COMMITS to avoid walking entire repository history.
+     *
+     * 2. Tree walk: walk the direct have commits' trees to collect tree/blob IDs.
+     *    This is what deduplicates the actual object content.
      *
      * @param list<ObjectId> $roots
      * @return array<string, true>
@@ -116,14 +118,88 @@ final readonly class LocalTransport implements TransportInterface
     {
         $seen = [];
 
-        /** @var SplQueue<ObjectId> $queue */
-        $queue = new SplQueue();
+        /** @var SplQueue<ObjectId> $treeQueue */
+        $treeQueue = new SplQueue();
+        $this->walkHaveCommitAncestry($objectStorage, $roots, $treeQueue, $seen);
+        $this->walkTrees($objectStorage, $treeQueue, $seen);
+
+        return $seen;
+    }
+
+    /**
+     * Walk commit parent chains to collect ancestor commit IDs + tree roots.
+     * Limited to 1000 commits to avoid full history walk on large repos.
+     * Only reads commit objects (small), never reads trees or blobs.
+     *
+     * @param list<ObjectId> $roots
+     * @param SplQueue<ObjectId> $treeQueue receives tree IDs to walk
+     * @param array<string, true> $seen receives commit IDs
+     */
+    private function walkHaveCommitAncestry(
+        CombinedObjectStorage $objectStorage,
+        array $roots,
+        SplQueue $treeQueue,
+        array &$seen,
+    ): void {
+        $commitLimit = 1000;
+        $commitCount = 0;
+
+        /** @var SplQueue<ObjectId> $commitQueue */
+        $commitQueue = new SplQueue();
         foreach ($roots as $root) {
-            $queue->enqueue($root);
+            $commitQueue->enqueue($root);
         }
 
-        while (! $queue->isEmpty()) {
-            $id = $queue->dequeue();
+        while (! $commitQueue->isEmpty() && $commitCount < $commitLimit) {
+            $id = $commitQueue->dequeue();
+            if (isset($seen[$id->hash])) {
+                continue;
+            }
+            $seen[$id->hash] = true;
+            $commitCount++;
+
+            if (! $objectStorage->exists($id)) {
+                continue;
+            }
+
+            $raw = $objectStorage->readRaw($id);
+            if ($raw->type !== ObjectType::Commit) {
+                continue;
+            }
+
+            $this->parseCommitForHaveWalk($raw->data, $commitQueue, $treeQueue);
+        }
+    }
+
+    /**
+     * Parse commit data: enqueue parent commits + tree ID.
+     *
+     * @param SplQueue<ObjectId> $commitQueue
+     * @param SplQueue<ObjectId> $treeQueue
+     */
+    private function parseCommitForHaveWalk(string $data, SplQueue $commitQueue, SplQueue $treeQueue): void
+    {
+        foreach (explode("\n", $data) as $line) {
+            if (str_starts_with($line, 'tree ')) {
+                $treeQueue->enqueue(ObjectId::fromHex(substr($line, 5)));
+            } elseif (str_starts_with($line, 'parent ')) {
+                $commitQueue->enqueue(ObjectId::fromHex(substr($line, 7)));
+            } elseif ($line === '') {
+                break;
+            }
+        }
+    }
+
+    /**
+     * Walk tree objects, collecting blob hashes from entries.
+     *
+     * @param SplQueue<ObjectId> $treeQueue
+     * @param array<string, true> $seen
+     */
+    private function walkTrees(CombinedObjectStorage $objectStorage, SplQueue $treeQueue, array &$seen): void
+    {
+        while (! $treeQueue->isEmpty()) {
+            $id = $treeQueue->dequeue();
             if (isset($seen[$id->hash])) {
                 continue;
             }
@@ -134,14 +210,10 @@ final readonly class LocalTransport implements TransportInterface
             }
 
             $raw = $objectStorage->readRaw($id);
-            if ($raw->type === ObjectType::Commit) {
-                $this->enqueueCommitRefs($raw->data, $queue);
-            } elseif ($raw->type === ObjectType::Tree) {
-                $this->collectTreeChildren($raw->data, $queue, $seen);
+            if ($raw->type === ObjectType::Tree) {
+                $this->collectTreeChildren($raw->data, $treeQueue, $seen);
             }
         }
-
-        return $seen;
     }
 
     /**
@@ -286,73 +358,10 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * Serialize objects into a pack format using streaming file I/O.
-     *
-     * Writes each object directly to a file to avoid accumulating the
-     * entire pack in memory. Each generator item is consumed and discarded
-     * before the next, keeping peak memory proportional to the largest single object.
-     *
      * @param Generator<int, RawObject> $objects
      */
     private function serializePack(Generator $objects, int $count, string $outputPath): void
     {
-        $dir = dirname($outputPath);
-        if (! is_dir($dir)) {
-            mkdir($dir, 0o777, true);
-        }
-
-        $tmpPath = $outputPath . '.tmp.' . getmypid();
-        $fh = fopen($tmpPath, 'wb');
-        if ($fh === false) {
-            return;
-        }
-
-        $hashCtx = hash_init('sha1');
-
-        $header = 'PACK' . pack('N', 2) . pack('N', $count);
-        $this->writeAndHash($fh, $hashCtx, $header);
-
-        foreach ($objects as $raw) {
-            $type = match ($raw->type) {
-                ObjectType::Commit => 1,
-                ObjectType::Tree => 2,
-                ObjectType::Blob => 3,
-                ObjectType::Tag => 4,
-            };
-
-            $this->writeAndHash($fh, $hashCtx, $this->encodeObjectHeader($type, strlen($raw->data)));
-            $compressed = gzcompress($raw->data);
-            $this->writeAndHash($fh, $hashCtx, $compressed !== false ? $compressed : '');
-        }
-
-        $checksum = hash_final($hashCtx, true);
-        fwrite($fh, $checksum);
-        fclose($fh);
-
-        rename($tmpPath, $outputPath);
-    }
-
-    /**
-     * @param resource $fh
-     */
-    private function writeAndHash($fh, \HashContext $hashCtx, string $data): void
-    {
-        fwrite($fh, $data);
-        hash_update($hashCtx, $data);
-    }
-
-    private function encodeObjectHeader(int $type, int $size): string
-    {
-        $byte = ($type << 4) | ($size & 0x0F);
-        $size >>= 4;
-        $header = '';
-
-        while ($size > 0) {
-            $header .= chr($byte | 0x80);
-            $byte = $size & 0x7F;
-            $size >>= 7;
-        }
-
-        return $header . chr($byte);
+        new StreamingPackSerializer()->serialize($objects, $count, $outputPath);
     }
 }
