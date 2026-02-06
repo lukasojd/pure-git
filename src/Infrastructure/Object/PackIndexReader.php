@@ -44,6 +44,11 @@ final class PackIndexReader
 
     private bool $initialized = false;
 
+    /**
+     * @var array<int, string>|null offset → hex hash (built lazily for delta reuse)
+     */
+    private ?array $offsetToHash = null;
+
     public function __construct(
         private readonly string $indexPath,
     ) {
@@ -98,6 +103,54 @@ final class PackIndexReader
         }
 
         return $ids;
+    }
+
+    /**
+     * Reverse lookup: find the object stored at a given pack file offset.
+     * Builds the full offset→hash map on first call (used for delta reuse).
+     */
+    public function findObjectAtOffset(int $offset): ?ObjectId
+    {
+        $this->ensureInitialized();
+        $this->ensureOffsetMap();
+
+        $hash = $this->offsetToHash[$offset] ?? null;
+
+        return $hash !== null ? ObjectId::fromHex($hash) : null;
+    }
+
+    private function ensureOffsetMap(): void
+    {
+        if ($this->offsetToHash !== null) {
+            return;
+        }
+
+        $fh = $this->fh;
+        if ($fh === null) {
+            $this->offsetToHash = [];
+            return;
+        }
+
+        $map = [];
+        for ($i = 0; $i < $this->totalObjects; $i++) {
+            fseek($fh, $this->hashesOffset + ($i * self::HASH_SIZE));
+            $hash = fread($fh, self::HASH_SIZE);
+            if ($hash === false || strlen($hash) < self::HASH_SIZE) {
+                break;
+            }
+
+            fseek($fh, $this->offsetsOffset + ($i * self::OFFSET_SIZE));
+            $offData = fread($fh, self::OFFSET_SIZE);
+            if ($offData === false || strlen($offData) < self::OFFSET_SIZE) {
+                break;
+            }
+
+            /** @var array{o: int} $off */
+            $off = unpack('No', $offData);
+            $map[$off['o']] = bin2hex($hash);
+        }
+
+        $this->offsetToHash = $map;
     }
 
     private function ensureInitialized(): void

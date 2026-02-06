@@ -44,6 +44,41 @@ final class PackfileReader
         }
     }
 
+    /**
+     * Get delta reuse info for an object, if it is stored as OFS_DELTA.
+     *
+     * Returns the base object ID and uncompressed delta data, allowing
+     * a pack writer to reuse the delta without running DeltaEncoder.
+     * Returns null for whole objects or if the base cannot be identified.
+     */
+    public function getDeltaReuse(ObjectId $id): ?DeltaReuseInfo
+    {
+        $offset = $this->indexReader->findOffset($id);
+        if ($offset === null) {
+            return null;
+        }
+
+        $handle = $this->getHandle();
+        fseek($handle, $offset);
+
+        $byte = $this->readByte($handle);
+        $type = ($byte >> 4) & 0x07;
+        $size = $byte & 0x0F;
+        $shift = 4;
+
+        while (($byte & 0x80) !== 0) {
+            $byte = $this->readByte($handle);
+            $size |= ($byte & 0x7F) << $shift;
+            $shift += 7;
+        }
+
+        if ($type !== self::OBJ_OFS_DELTA) {
+            return null;
+        }
+
+        return $this->readDeltaReuseInfo($handle, $offset, $size);
+    }
+
     public function readObject(ObjectId $id): RawObject
     {
         $offset = $this->indexReader->findOffset($id);
@@ -81,6 +116,30 @@ final class PackfileReader
             self::OBJ_REF_DELTA => $this->readRefDelta($handle, $size),
             default => throw new InvalidObjectException(sprintf('Unknown pack object type: %d', $type)),
         };
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function readDeltaReuseInfo($handle, int $currentOffset, int $deltaSize): ?DeltaReuseInfo
+    {
+        $byte = $this->readByte($handle);
+        $negativeOffset = $byte & 0x7F;
+
+        while (($byte & 0x80) !== 0) {
+            $byte = $this->readByte($handle);
+            $negativeOffset = (($negativeOffset + 1) << 7) | ($byte & 0x7F);
+        }
+
+        $baseOffset = $currentOffset - $negativeOffset;
+        $baseId = $this->indexReader->findObjectAtOffset($baseOffset);
+        if (! $baseId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId) {
+            return null;
+        }
+
+        $deltaData = $this->readCompressedData($handle, $deltaSize);
+
+        return new DeltaReuseInfo(baseId: $baseId, deltaData: $deltaData);
     }
 
     /**

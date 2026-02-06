@@ -140,6 +140,88 @@ final class PackfileWriterTest extends TestCase
         }
     }
 
+    #[Test]
+    public function deltaReuseRoundtripCorrectness(): void
+    {
+        $blobs = $this->createSimilarBlobs(20);
+
+        // Write the first pack (source for reuse)
+        $sourcePath = $this->tmpDir . '/source.pack';
+        $writer = new PackfileWriter();
+        $writer->write($blobs, $sourcePath, new PackWriterConfig(enableDelta: true, generateIndex: true));
+
+        $sourceIndex = new PackIndexReader($this->tmpDir . '/source.idx');
+        $sourceReader = new PackfileReader($sourcePath, $sourceIndex);
+
+        // Write a second pack reusing deltas from the first
+        $reusePath = $this->tmpDir . '/reuse.pack';
+        $writer->write($blobs, $reusePath, new PackWriterConfig(enableDelta: true, generateIndex: true), [$sourceReader]);
+
+        $reuseIndex = new PackIndexReader($this->tmpDir . '/reuse.idx');
+        $reuseReader = new PackfileReader($reusePath, $reuseIndex);
+
+        foreach ($blobs as $blob) {
+            $raw = $reuseReader->readObject($blob->getId());
+            $this->assertSame($blob->serialize(), $raw->data, sprintf(
+                'Reuse roundtrip mismatch for %s',
+                $blob->getId()->short(),
+            ));
+        }
+    }
+
+    #[Test]
+    public function deltaReuseFallsBackWhenBaseMissing(): void
+    {
+        $blobs = $this->createSimilarBlobs(10);
+
+        // Write a source pack with all blobs
+        $sourcePath = $this->tmpDir . '/full.pack';
+        $writer = new PackfileWriter();
+        $writer->write($blobs, $sourcePath, new PackWriterConfig(enableDelta: true, generateIndex: true));
+
+        $sourceIndex = new PackIndexReader($this->tmpDir . '/full.idx');
+        $sourceReader = new PackfileReader($sourcePath, $sourceIndex);
+
+        // Write a pack with only a subset (base objects may be missing)
+        $subset = array_slice($blobs, 5);
+        $subsetPath = $this->tmpDir . '/subset.pack';
+        $writer->write($subset, $subsetPath, new PackWriterConfig(enableDelta: true, generateIndex: true), [$sourceReader]);
+
+        $subsetIndex = new PackIndexReader($this->tmpDir . '/subset.idx');
+        $subsetReader = new PackfileReader($subsetPath, $subsetIndex);
+
+        foreach ($subset as $blob) {
+            $raw = $subsetReader->readObject($blob->getId());
+            $this->assertSame($blob->serialize(), $raw->data);
+        }
+    }
+
+    #[Test]
+    public function deltaReuseRespectsDepthLimit(): void
+    {
+        $blobs = $this->createSimilarBlobs(15);
+
+        // Write source with deep chains allowed
+        $sourcePath = $this->tmpDir . '/deep.pack';
+        $writer = new PackfileWriter();
+        $writer->write($blobs, $sourcePath, new PackWriterConfig(maxDepth: 50, enableDelta: true, generateIndex: true));
+
+        $sourceIndex = new PackIndexReader($this->tmpDir . '/deep.idx');
+        $sourceReader = new PackfileReader($sourcePath, $sourceIndex);
+
+        // Rewrite with shallow depth limit — reuse should be rejected for deep chains
+        $shallowPath = $this->tmpDir . '/shallow-reuse.pack';
+        $writer->write($blobs, $shallowPath, new PackWriterConfig(maxDepth: 1, enableDelta: true, generateIndex: true), [$sourceReader]);
+
+        $shallowIndex = new PackIndexReader($this->tmpDir . '/shallow-reuse.idx');
+        $shallowReader = new PackfileReader($shallowPath, $shallowIndex);
+
+        foreach ($blobs as $blob) {
+            $raw = $shallowReader->readObject($blob->getId());
+            $this->assertSame($blob->serialize(), $raw->data);
+        }
+    }
+
     /**
      * @return list<Blob>
      */

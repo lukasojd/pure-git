@@ -28,11 +28,12 @@ final class PackfileWriter
 
     /**
      * @param list<GitObject> $objects
+     * @param list<PackfileReader> $reuseSources existing packs to check for reusable deltas
      */
-    public function write(array $objects, string $outputPath, ?PackWriterConfig $config = null): void
+    public function write(array $objects, string $outputPath, ?PackWriterConfig $config = null, array $reuseSources = []): void
     {
         $config ??= new PackWriterConfig();
-        $prepared = $this->prepareObjects($objects, $config);
+        $prepared = $this->prepareObjects($objects, $config, $reuseSources);
 
         $this->writePack($prepared, $outputPath);
 
@@ -43,17 +44,22 @@ final class PackfileWriter
 
     /**
      * @param list<GitObject> $objects
+     * @param list<PackfileReader> $reuseSources
      * @return list<PackEntry>
      */
-    private function prepareObjects(array $objects, PackWriterConfig $config): array
+    private function prepareObjects(array $objects, PackWriterConfig $config, array $reuseSources): array
     {
+        $objectSet = $this->buildObjectHashSet($objects);
         $sorted = $this->sortObjects($objects);
         $entries = [];
         $window = [];
+        /** @var array<string, PackEntry> $entryByHash */
+        $entryByHash = [];
 
         foreach ($sorted as $object) {
-            $entry = $this->tryDeltaEncode($object, $window, $config);
+            $entry = $this->tryDeltaEncode($object, $window, $config, $reuseSources, $objectSet, $entryByHash);
             $entries[] = $entry;
+            $entryByHash[$entry->hash] = $entry;
             $window[] = $entry;
 
             if (count($window) > $config->window) {
@@ -62,6 +68,20 @@ final class PackfileWriter
         }
 
         return $entries;
+    }
+
+    /**
+     * @param list<GitObject> $objects
+     * @return array<string, true>
+     */
+    private function buildObjectHashSet(array $objects): array
+    {
+        $set = [];
+        foreach ($objects as $obj) {
+            $set[$obj->getId()->hash] = true;
+        }
+
+        return $set;
     }
 
     /**
@@ -86,12 +106,21 @@ final class PackfileWriter
     }
 
     /**
-     * Attempt delta encoding against objects in the sliding window.
+     * Attempt delta encoding: try reuse first, then window-based fresh delta.
      *
      * @param list<PackEntry> $window
+     * @param list<PackfileReader> $reuseSources
+     * @param array<string, true> $objectSet
+     * @param array<string, PackEntry> $entryByHash
      */
-    private function tryDeltaEncode(GitObject $object, array $window, PackWriterConfig $config): PackEntry
-    {
+    private function tryDeltaEncode(
+        GitObject $object,
+        array $window,
+        PackWriterConfig $config,
+        array $reuseSources,
+        array $objectSet,
+        array $entryByHash,
+    ): PackEntry {
         $data = $object->serialize();
         $type = $this->objectTypeToPackType($object->getType());
 
@@ -101,6 +130,13 @@ final class PackfileWriter
 
         if (! $config->enableDelta) {
             return $fullEntry;
+        }
+
+        if ($reuseSources !== []) {
+            $reused = new DeltaReuseFinder()->tryReuse($object, $data, $fullCompressed, $reuseSources, $objectSet, $entryByHash, $config);
+            if ($reused instanceof \Lukasojd\PureGit\Infrastructure\Object\PackEntry) {
+                return $reused;
+            }
         }
 
         $best = $this->findBestDelta($object, $data, $fullCompressed, $window, $config);
