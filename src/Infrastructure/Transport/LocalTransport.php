@@ -174,8 +174,6 @@ final readonly class LocalTransport implements TransportInterface
             $size >>= 7;
         }
 
-        $header .= chr($byte);
-
-        return $header;
+        return $header . chr($byte);
     }
 }

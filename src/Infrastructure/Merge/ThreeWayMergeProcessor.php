@@ -48,7 +48,7 @@ final readonly class ThreeWayMergeProcessor
         $baseIdx = 0;
 
         while ($baseIdx < $baseLen || $oursIdx < count($this->oursLines) || $theirsIdx < count($this->theirsLines)) {
-            $step = $this->processRegion($baseIdx, $baseLen, $result, $oursIdx, $theirsIdx);
+            $step = $this->processRegion($baseIdx, $baseLen, $result);
             if ($step === null) {
                 break;
             }
@@ -71,7 +71,7 @@ final readonly class ThreeWayMergeProcessor
      * @param list<string> $result
      * @return array{conflict: bool, result: list<string>, baseAdvance: int, oursAdvance: int, theirsAdvance: int}|null
      */
-    private function processRegion(int $baseIdx, int $baseLen, array $result, int $oursIdx, int $theirsIdx): ?array
+    private function processRegion(int $baseIdx, int $baseLen, array $result): ?array
     {
         $oursChanged = isset($this->oursChanges[$baseIdx]);
         $theirsChanged = isset($this->theirsChanges[$baseIdx]);
