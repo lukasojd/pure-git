@@ -4,13 +4,17 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\Tests\Integration;
 
+use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Object\Blob;
+use Lukasojd\PureGit\Domain\Object\Commit;
+use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Infrastructure\Object\DeltaDecoder;
 use Lukasojd\PureGit\Infrastructure\Object\DeltaEncoder;
 use Lukasojd\PureGit\Infrastructure\Object\PackfileReader;
 use Lukasojd\PureGit\Infrastructure\Object\PackfileWriter;
 use Lukasojd\PureGit\Infrastructure\Object\PackIndexReader;
 use Lukasojd\PureGit\Infrastructure\Object\PackWriterConfig;
+use Lukasojd\PureGit\Infrastructure\Transport\LocalTransport;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -186,5 +190,76 @@ final class BenchmarkGateTest extends TestCase
             'Pack write consumed %.1f MB (expected < 50MB)',
             $memDelta,
         ));
+    }
+
+    #[Test]
+    public function fetchScalingGate(): void
+    {
+        $repoPath = '/private/tmp/pure-git-clone';
+        if (! is_dir($repoPath . '/objects')) {
+            $this->markTestSkipped('Benchmark repository not available at ' . $repoPath);
+        }
+
+        $repo = Repository::open($repoPath);
+        $headId = $repo->refs->resolve(RefName::head());
+        $headCommit = $repo->objects->read($headId);
+        $this->assertInstanceOf(Commit::class, $headCommit);
+
+        $transport = new LocalTransport($repoPath);
+
+        // 2-commit fetch
+        $start2 = hrtime(true);
+        $path2 = $transport->fetchPack([$headId], $headCommit->parents);
+        $time2 = (hrtime(true) - $start2) / 1_000_000;
+        @unlink($path2);
+
+        // 5-commit fetch: walk 5 commits to find haves
+        $commits = $this->walkCommits($repo, $headId, 5);
+        $haves = [];
+        if (count($commits) >= 5) {
+            $lastCommit = $repo->objects->read($commits[count($commits) - 1]);
+            $this->assertInstanceOf(Commit::class, $lastCommit);
+            $haves = $lastCommit->parents;
+        }
+
+        $start5 = hrtime(true);
+        $path5 = $transport->fetchPack([$headId], $haves);
+        $time5 = (hrtime(true) - $start5) / 1_000_000;
+        @unlink($path5);
+
+        // Scaling gate: 5-commit fetch must be <= 4x the 2-commit fetch
+        $ratio = $time5 / max($time2, 1);
+        $this->assertLessThan(4.0, $ratio, sprintf(
+            'Fetch scaling ratio %.1fx (5-commit %.0fms / 2-commit %.0fms) exceeds 4x limit',
+            $ratio,
+            $time5,
+            $time2,
+        ));
+    }
+
+    /**
+     * @return list<\Lukasojd\PureGit\Domain\Object\ObjectId>
+     */
+    private function walkCommits(Repository $repo, \Lukasojd\PureGit\Domain\Object\ObjectId $startId, int $limit): array
+    {
+        $seen = [];
+        $queue = [$startId];
+        $commits = [];
+
+        while ($queue !== [] && count($commits) < $limit) {
+            $id = array_shift($queue);
+            if (isset($seen[$id->hash])) {
+                continue;
+            }
+            $seen[$id->hash] = true;
+            $commit = $repo->objects->read($id);
+            assert($commit instanceof Commit);
+            $commits[] = $id;
+            foreach ($commit->parents as $parent) {
+                $queue[] = $parent;
+            }
+        }
+
+        return $commits;
     }
 }

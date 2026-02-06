@@ -111,6 +111,10 @@ final class PackfileWriter
     /**
      * Search the window for the best delta base.
      *
+     * Guardrails: max candidate comparisons per object, size-bucket filtering
+     * (skip candidates where size differs by more than sizeBucketRatio),
+     * and early abort when a good-enough delta is found (< 25% of full size).
+     *
      * @param list<PackEntry> $window
      */
     private function findBestDelta(
@@ -123,44 +127,86 @@ final class PackfileWriter
         $bestEntry = null;
         $bestScore = strlen($fullCompressed);
         $type = $this->objectTypeToPackType($object->getType());
+        $dataSize = strlen($data);
+        $tested = 0;
+        $earlyAbortThreshold = strlen($fullCompressed) / 4;
 
         foreach (array_reverse($window) as $candidate) {
-            if (! $this->isValidDeltaCandidate($candidate, $type, $config)) {
+            if ($tested >= $config->maxCandidatesPerObject) {
+                break;
+            }
+
+            if (! $this->isValidDeltaCandidate($candidate, $type, $dataSize, $config)) {
                 continue;
             }
 
-            $delta = DeltaEncoder::encode($candidate->rawData, $data);
-            if ($delta === null) {
+            $tested++;
+            $result = $this->tryDeltaCandidate($candidate, $data, $object, $config, $bestScore);
+
+            if ($result === null) {
                 continue;
             }
 
-            $compressedDelta = gzcompress($delta, $config->compressionLevel);
-            if ($compressedDelta === false) {
-                continue;
-            }
+            [$bestEntry, $bestScore] = $result;
 
-            $score = strlen($compressedDelta) + $this->depthPenalty($candidate->depth, $config);
-
-            if ($score < $bestScore) {
-                $bestScore = $score;
-                $bestEntry = new PackEntry(
-                    self::OBJ_OFS_DELTA,
-                    $data,
-                    $compressedDelta,
-                    0,
-                    $candidate->hash,
-                    $object->getId()->hash,
-                    $candidate->depth + 1,
-                );
+            if ($bestScore < $earlyAbortThreshold) {
+                break;
             }
         }
 
         return $bestEntry;
     }
 
-    private function isValidDeltaCandidate(PackEntry $candidate, int $type, PackWriterConfig $config): bool
+    /**
+     * Try a single delta candidate and return the entry + score if better.
+     *
+     * @return array{PackEntry, int}|null
+     */
+    private function tryDeltaCandidate(
+        PackEntry $candidate,
+        string $data,
+        GitObject $object,
+        PackWriterConfig $config,
+        int $bestScore,
+    ): ?array {
+        $delta = DeltaEncoder::encode($candidate->rawData, $data);
+        if ($delta === null) {
+            return null;
+        }
+
+        $compressedDelta = gzcompress($delta, $config->compressionLevel);
+        if ($compressedDelta === false) {
+            return null;
+        }
+
+        $score = strlen($compressedDelta) + $this->depthPenalty($candidate->depth, $config);
+        if ($score >= $bestScore) {
+            return null;
+        }
+
+        $entry = new PackEntry(
+            self::OBJ_OFS_DELTA,
+            $data,
+            $compressedDelta,
+            0,
+            $candidate->hash,
+            $object->getId()->hash,
+            $candidate->depth + 1,
+        );
+
+        return [$entry, $score];
+    }
+
+    private function isValidDeltaCandidate(PackEntry $candidate, int $type, int $targetSize, PackWriterConfig $config): bool
     {
         if ($candidate->depth >= $config->maxDepth) {
+            return false;
+        }
+
+        $candidateSize = strlen($candidate->rawData);
+        $sizeDiff = abs($candidateSize - $targetSize);
+        $maxDiff = (int) (max($candidateSize, $targetSize) * $config->sizeBucketRatio);
+        if ($sizeDiff > $maxDiff) {
             return false;
         }
 

@@ -81,7 +81,14 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * BFS to collect all reachable object IDs without loading full object data.
+     * Collect objects reachable from wants but not from haves.
+     *
+     * Two-phase approach:
+     * 1. Walk ALL objects reachable from have commits (trees + blobs included)
+     * 2. Walk want side, skipping anything already in the have set
+     *
+     * This prevents re-discovering shared trees/blobs between commits,
+     * which is the primary cause of O(C * T * B) scaling on large repos.
      *
      * @param list<ObjectId> $wants
      * @param list<ObjectId> $haves
@@ -89,13 +96,102 @@ final readonly class LocalTransport implements TransportInterface
      */
     private function collectObjectIds(CombinedObjectStorage $objectStorage, array $wants, array $haves): array
     {
+        $haveSet = $this->collectReachableIds($objectStorage, $haves);
+
+        return $this->collectMissingIds($objectStorage, $wants, $haveSet);
+    }
+
+    /**
+     * BFS to collect all object IDs reachable from the given roots.
+     *
+     * Optimization: blob hashes are extracted directly from tree entries
+     * without reading the blob data. Only commits and trees are read from
+     * storage. This reduces I/O from O(commits + trees + blobs) to
+     * O(commits + trees), skipping thousands of blob reads on large repos.
+     *
+     * @param list<ObjectId> $roots
+     * @return array<string, true>
+     */
+    private function collectReachableIds(CombinedObjectStorage $objectStorage, array $roots): array
+    {
+        $seen = [];
+
+        /** @var SplQueue<ObjectId> $queue */
+        $queue = new SplQueue();
+        foreach ($roots as $root) {
+            $queue->enqueue($root);
+        }
+
+        while (! $queue->isEmpty()) {
+            $id = $queue->dequeue();
+            if (isset($seen[$id->hash])) {
+                continue;
+            }
+            $seen[$id->hash] = true;
+
+            if (! $objectStorage->exists($id)) {
+                continue;
+            }
+
+            $raw = $objectStorage->readRaw($id);
+            if ($raw->type === ObjectType::Commit) {
+                $this->enqueueCommitRefs($raw->data, $queue);
+            } elseif ($raw->type === ObjectType::Tree) {
+                $this->collectTreeChildren($raw->data, $queue, $seen);
+            }
+        }
+
+        return $seen;
+    }
+
+    /**
+     * Process tree entries: enqueue subtrees for traversal, mark blobs as seen directly.
+     *
+     * Blobs have no children, so we only need their hash (already in the tree entry).
+     * This avoids expensive readRaw() calls for every blob in the have set.
+     *
+     * @param SplQueue<ObjectId> $queue
+     * @param array<string, true> $seen
+     */
+    private function collectTreeChildren(string $data, SplQueue $queue, array &$seen): void
+    {
+        $offset = 0;
+        $len = strlen($data);
+
+        while ($offset < $len) {
+            $spacePos = strpos($data, ' ', $offset);
+            if ($spacePos === false) {
+                break;
+            }
+            $mode = substr($data, $offset, $spacePos - $offset);
+            $nullPos = strpos($data, "\0", $spacePos);
+            if ($nullPos === false) {
+                break;
+            }
+            $hash = substr($data, $nullPos + 1, 20);
+            $childId = ObjectId::fromBinary($hash);
+
+            if ($mode === '40000') {
+                $queue->enqueue($childId);
+            } else {
+                $seen[$childId->hash] = true;
+            }
+
+            $offset = $nullPos + 21;
+        }
+    }
+
+    /**
+     * BFS from want roots, collecting only objects NOT in the have set.
+     *
+     * @param list<ObjectId> $wants
+     * @param array<string, true> $haveSet
+     * @return list<ObjectId>
+     */
+    private function collectMissingIds(CombinedObjectStorage $objectStorage, array $wants, array $haveSet): array
+    {
         $ids = [];
         $seen = [];
-        $haveSet = [];
-
-        foreach ($haves as $have) {
-            $haveSet[$have->hash] = true;
-        }
 
         /** @var SplQueue<ObjectId> $queue */
         $queue = new SplQueue();

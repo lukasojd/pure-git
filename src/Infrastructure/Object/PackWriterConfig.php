@@ -13,6 +13,8 @@ final readonly class PackWriterConfig
         public bool $generateIndex = false,
         public int $compressionLevel = 6,
         public int $depthPenaltyFactor = 50,
+        public int $maxCandidatesPerObject = 32,
+        public float $sizeBucketRatio = 0.125,
     ) {
     }
 }

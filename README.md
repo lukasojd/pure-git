@@ -116,10 +116,22 @@ composer test          # PHPUnit tests
 composer test:coverage # tests with coverage report
 ```
 
+## Performance
+
+Delta encoding with sliding window (window=10, max depth=50) achieves ~77% compression ratio on similar objects. Packs use OFS_DELTA format. Transport streams packs directly to disk for minimal memory usage.
+
+Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
+
+| Operation | Time | Peak Memory |
+|---|---|---|
+| Read HEAD commit | 25 ms | 34 MB |
+| Walk 3576 files | 10 ms | 34 MB |
+| Log 1000 commits | 13 ms | 34 MB |
+| Read all blobs | 235 ms | 92 MB |
+
 ## Limitations
 
 - Transport layer currently supports local path cloning only
-- Pack writer produces basic (non-delta) packs
 - No `.gitignore` support yet
 - No submodule support
 - No sparse checkout
