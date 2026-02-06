@@ -26,6 +26,8 @@ final class PackIndexReader
 
     private const int CRC_SIZE = 4;
 
+    private const int HASH_MAP_THRESHOLD = 500;
+
     /**
      * @var array<int, int> 256-entry fanout table (1-indexed from unpack)
      */
@@ -45,9 +47,27 @@ final class PackIndexReader
     private bool $initialized = false;
 
     /**
+     * In-memory hash table (all hashes concatenated, 20 bytes each).
+     * Loaded lazily on first lookup for fast binary search without fseek.
+     */
+    private ?string $hashTable = null;
+
+    /**
+     * In-memory offset table (all 4-byte big-endian offsets concatenated).
+     */
+    private ?string $offsetTable = null;
+
+    /**
      * @var array<int, string>|null offset → hex hash (built lazily for delta reuse)
      */
     private ?array $offsetToHash = null;
+
+    private int $lookupCount = 0;
+
+    /**
+     * @var array<string, int>|null binHash → pack file offset (built after HASH_MAP_THRESHOLD lookups)
+     */
+    private ?array $hashMap = null;
 
     public function __construct(
         private readonly string $indexPath,
@@ -63,9 +83,31 @@ final class PackIndexReader
 
     public function findOffset(ObjectId $id): ?int
     {
+        return $this->findOffsetByBinary($id->toBinary());
+    }
+
+    /**
+     * Find pack offset by raw 20-byte binary hash. Avoids ObjectId creation overhead.
+     *
+     * @param string $binHash 20-byte raw hash
+     */
+    public function findOffsetByBinary(string $binHash): ?int
+    {
+        // Fast path: hash map stores binHash → offset directly
+        $hashMap = $this->hashMap;
+        if ($hashMap !== null) {
+            return $hashMap[$binHash] ?? null;
+        }
+
         $this->ensureInitialized();
 
-        $position = $this->binarySearchHash($id->toBinary());
+        $position = $this->binarySearchHash($binHash);
+
+        // binarySearchHash may have built the hash map at threshold — recheck
+        if ($this->hashMap !== null) {
+            return $this->hashMap[$binHash] ?? null;
+        }
+
         if ($position === null) {
             return null;
         }
@@ -75,9 +117,23 @@ final class PackIndexReader
 
     public function hasObject(ObjectId $id): bool
     {
+        if ($this->hashMap !== null) {
+            return isset($this->hashMap[$id->toBinary()]);
+        }
+
         $this->ensureInitialized();
 
-        return $this->binarySearchHash($id->toBinary()) !== null;
+        $binHash = $id->toBinary();
+        if ($this->binarySearchHash($binHash) !== null) {
+            return true;
+        }
+
+        // binarySearchHash may have built the hash map at threshold — recheck
+        if ($this->hashMap !== null) {
+            return isset($this->hashMap[$binHash]);
+        }
+
+        return false;
     }
 
     /**
@@ -86,20 +142,15 @@ final class PackIndexReader
     public function getAllIds(): array
     {
         $this->ensureInitialized();
+        $this->ensureTables();
 
-        $ids = [];
-        $fh = $this->fh;
-        if ($fh === null) {
+        if ($this->hashTable === null || $this->hashTable === '') {
             return [];
         }
 
+        $ids = [];
         for ($i = 0; $i < $this->totalObjects; $i++) {
-            fseek($fh, $this->hashesOffset + ($i * self::HASH_SIZE));
-            $raw = fread($fh, self::HASH_SIZE);
-            if ($raw === false || strlen($raw) < self::HASH_SIZE) {
-                break;
-            }
-            $ids[] = ObjectId::fromBinary($raw);
+            $ids[] = ObjectId::fromBinary(substr($this->hashTable, $i * self::HASH_SIZE, self::HASH_SIZE));
         }
 
         return $ids;
@@ -125,41 +176,19 @@ final class PackIndexReader
             return;
         }
 
-        $fh = $this->fh;
-        if ($fh === null) {
+        $this->ensureTables();
+
+        if ($this->totalObjects === 0 || $this->hashTable === null || $this->offsetTable === null) {
             $this->offsetToHash = [];
+
             return;
         }
 
-        if ($this->totalObjects === 0) {
-            $this->offsetToHash = [];
-            return;
-        }
-
-        // Sequential pass 1: read all hashes
-        $hashBytes = max(1, $this->totalObjects * self::HASH_SIZE);
-        fseek($fh, $this->hashesOffset);
-        $hashData = fread($fh, $hashBytes);
-        if ($hashData === false) {
-            $this->offsetToHash = [];
-            return;
-        }
-
-        // Sequential pass 2: read all offsets
-        $offsetBytes = max(1, $this->totalObjects * self::OFFSET_SIZE);
-        fseek($fh, $this->offsetsOffset);
-        $offsetData = fread($fh, $offsetBytes);
-        if ($offsetData === false) {
-            $this->offsetToHash = [];
-            return;
-        }
-
-        // Build map from bulk reads
         $map = [];
         for ($i = 0; $i < $this->totalObjects; $i++) {
-            $hash = substr($hashData, $i * self::HASH_SIZE, self::HASH_SIZE);
+            $hash = substr($this->hashTable, $i * self::HASH_SIZE, self::HASH_SIZE);
             /** @var array{o: int} $off */
-            $off = unpack('No', $offsetData, $i * self::OFFSET_SIZE);
+            $off = unpack('No', $this->offsetTable, $i * self::OFFSET_SIZE);
             $map[$off['o']] = bin2hex($hash);
         }
 
@@ -222,28 +251,62 @@ final class PackIndexReader
         }
     }
 
+    private function ensureTables(): void
+    {
+        if ($this->hashTable !== null) {
+            return;
+        }
+
+        $fh = $this->fh;
+        if ($fh === null || $this->totalObjects === 0) {
+            $this->hashTable = '';
+            $this->offsetTable = '';
+
+            return;
+        }
+
+        $hashBytes = max(1, $this->totalObjects * self::HASH_SIZE);
+        $offsetBytes = max(1, $this->totalObjects * self::OFFSET_SIZE);
+
+        fseek($fh, $this->hashesOffset);
+        $this->hashTable = (string) fread($fh, $hashBytes);
+
+        fseek($fh, $this->offsetsOffset);
+        $this->offsetTable = (string) fread($fh, $offsetBytes);
+    }
+
     /**
-     * Binary search in the on-disk hash table using the fanout for range bounds.
+     * Binary search with auto-escalation to hash map.
+     *
+     * Returns position index (for readOffsetAt) or null. After threshold,
+     * builds hash map and returns null — caller rechecks hashMap directly.
      *
      * @param string $binHash 20-byte raw hash
      * @return int|null position index if found, null otherwise
      */
     private function binarySearchHash(string $binHash): ?int
     {
-        $fh = $this->fh;
-        if ($fh === null) {
+        $this->ensureTables();
+
+        $hashTable = $this->hashTable;
+        if ($hashTable === null || $hashTable === '') {
             return null;
         }
 
-        [$lo, $hi] = $this->fanoutRange(ord($binHash[0]));
+        if (++$this->lookupCount >= self::HASH_MAP_THRESHOLD) {
+            $this->buildHashMap();
+
+            // Caller (findOffset/hasObject) rechecks $this->hashMap
+            return null;
+        }
+
+        $firstByte = ord($binHash[0]);
+        $lo = $firstByte === 0 ? 0 : $this->fanout[$firstByte];
+        $hi = $this->fanout[$firstByte + 1] - 1;
 
         while ($lo <= $hi) {
             $mid = $lo + (int) (($hi - $lo) / 2);
-            fseek($fh, $this->hashesOffset + ($mid * self::HASH_SIZE));
-            $candidate = fread($fh, self::HASH_SIZE);
-            if ($candidate === false) {
-                return null;
-            }
+            $candidate = substr($hashTable, $mid * self::HASH_SIZE, self::HASH_SIZE);
 
             $cmp = strcmp($binHash, $candidate);
             if ($cmp === 0) {
@@ -256,32 +319,36 @@ final class PackIndexReader
         return null;
     }
 
-    /**
-     * @return array{int, int} [lo, hi] index range from the fanout table
-     */
-    private function fanoutRange(int $firstByte): array
+    private function buildHashMap(): void
     {
-        $lo = $firstByte === 0 ? 0 : $this->fanout[$firstByte];
-        $hi = $this->fanout[$firstByte + 1] - 1;
+        $hashTable = $this->hashTable;
+        $offsetTable = $this->offsetTable;
+        if ($hashTable === null || $hashTable === '' || $offsetTable === null || $offsetTable === '') {
+            $this->hashMap = [];
 
-        return [$lo, $hi];
+            return;
+        }
+
+        $map = [];
+        for ($i = 0; $i < $this->totalObjects; $i++) {
+            /** @var array{o: int} $off */
+            $off = unpack('No', $offsetTable, $i * self::OFFSET_SIZE);
+            $map[substr($hashTable, $i * self::HASH_SIZE, self::HASH_SIZE)] = $off['o'];
+        }
+
+        $this->hashMap = $map;
     }
 
     private function readOffsetAt(int $position): int
     {
-        $fh = $this->fh;
-        if ($fh === null) {
-            return 0;
-        }
+        $this->ensureTables();
 
-        fseek($fh, $this->offsetsOffset + ($position * self::OFFSET_SIZE));
-        $data = fread($fh, self::OFFSET_SIZE);
-        if ($data === false || strlen($data) < self::OFFSET_SIZE) {
+        if ($this->offsetTable === null || $this->offsetTable === '') {
             return 0;
         }
 
         /** @var array{o: int} $off */
-        $off = unpack('No', $data);
+        $off = unpack('No', $this->offsetTable, $position * self::OFFSET_SIZE);
 
         return $off['o'];
     }

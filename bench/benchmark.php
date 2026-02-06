@@ -11,8 +11,10 @@ use Lukasojd\PureGit\Application\Handler\StatusHandler;
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
+use Lukasojd\PureGit\Domain\Object\ObjectType;
 use Lukasojd\PureGit\Domain\Object\Tree;
 use Lukasojd\PureGit\Domain\Ref\RefName;
+use Lukasojd\PureGit\Infrastructure\CommitGraph\CommitDataExtractor;
 use Lukasojd\PureGit\Infrastructure\Transport\LocalTransport;
 
 /**
@@ -260,6 +262,72 @@ bench('11b. Fetch pack (5 commits deep)', function () use ($repo, $headId) {
     return sprintf('(%d KB pack)', $size / 1024);
 });
 
+// 11c. Count all commits (BFS) — uses readRaw + CommitDataExtractor
+$bfsCommitCount = 0;
+bench('11c. Count all commits (BFS)', function () use ($repo, &$bfsCommitCount) {
+    $extractor = new CommitDataExtractor();
+    $allRefs = $repo->refs->listRefs('refs/');
+    try {
+        $allRefs['HEAD'] = $repo->refs->resolve(RefName::head());
+    } catch (\Throwable) {
+    }
+
+    $visited = [];
+    $queue = new \SplQueue();
+    foreach ($allRefs as $id) {
+        if (! isset($visited[$id->hash])) {
+            $visited[$id->hash] = true;
+            $queue->enqueue($id->hash);
+        }
+    }
+
+    $count = 0;
+    while (! $queue->isEmpty()) {
+        $hex = $queue->dequeue();
+        $raw = $repo->objects->readRaw(ObjectId::fromTrustedHex($hex));
+        if ($raw->type === ObjectType::Tag) {
+            $targetHex = $extractor->extractTagTarget($raw);
+            if ($targetHex !== null && ! isset($visited[$targetHex])) {
+                $visited[$targetHex] = true;
+                $queue->enqueue($targetHex);
+            }
+            continue;
+        }
+        $data = $extractor->extract($raw);
+        if ($data === null) {
+            continue;
+        }
+        $count++;
+        foreach ($data['parents'] as $parentHex) {
+            if (! isset($visited[$parentHex])) {
+                $visited[$parentHex] = true;
+                $queue->enqueue($parentHex);
+            }
+        }
+    }
+    $bfsCommitCount = $count;
+    return sprintf('(%d commits)', $count);
+});
+
+// 11d. Write commit-graph
+bench('11d. Write commit-graph', function () use ($repo) {
+    $handler = new \Lukasojd\PureGit\Application\Handler\CommitGraphHandler($repo);
+    $result = $handler->write();
+    return sprintf('(%d commits, %d KB)', $result->commitCount, $result->fileSizeBytes / 1024);
+});
+
+// 11e. Count all commits (commit-graph)
+bench('11e. Count all commits (commit-graph)', function () use ($repo, $bfsCommitCount) {
+    $graphPath = $repo->gitDir . '/objects/info/commit-graph';
+    if (! file_exists($graphPath)) {
+        return '(no commit-graph file)';
+    }
+    $reader = new \Lukasojd\PureGit\Infrastructure\CommitGraph\CommitGraphReader($graphPath);
+    $count = $reader->getCommitCount();
+    $match = $count === $bfsCommitCount ? 'MATCH' : 'MISMATCH';
+    return sprintf('(%d commits, %s vs BFS)', $count, $match);
+});
+
 // 12. Read 50 random tags
 bench('12. Resolve 50 tags', function () use ($repo, $refs) {
     $tagRefs = array_filter($refs, fn ($name) => str_starts_with($name, 'refs/tags/'), ARRAY_FILTER_USE_KEY);
@@ -310,6 +378,196 @@ if ($noDeltaSize > 0 && $deltaSize > 0) {
 
 @unlink($noDeltaPath);
 @unlink($deltaPath);
+
+// --- PureGit vs Native Git ---
+echo "\n--- PureGit vs Native Git ---\n";
+
+/**
+ * Time a native git command and return [elapsed_ms, stdout].
+ *
+ * @return array{float, string}
+ */
+function gitBench(string $repoPath, string $args): array
+{
+    // Remove our custom commit-graph so native git doesn't warn about it
+    @unlink($repoPath . '/objects/info/commit-graph');
+
+    $start = hrtime(true);
+    $output = [];
+    $code = 0;
+    exec(sprintf('git -C %s %s 2>/dev/null', escapeshellarg($repoPath), $args), $output, $code);
+    $elapsed = (hrtime(true) - $start) / 1_000_000;
+
+    return [$elapsed, implode("\n", $output)];
+}
+
+/**
+ * @param array<string, array{float, float}> $rows
+ */
+function comparisonTable(string $title, array $rows): void
+{
+    echo "\n";
+    printf("  %-35s %12s %12s %12s\n", $title, 'PureGit', 'Native Git', 'Verdict');
+    printf("  %s\n", str_repeat('-', 75));
+
+    foreach ($rows as $label => [$pureMs, $gitMs]) {
+        if ($gitMs > 0 && $pureMs > 0) {
+            if ($pureMs <= $gitMs) {
+                $verdict = sprintf('%.0fx faster', $gitMs / $pureMs);
+            } else {
+                $verdict = sprintf('%.1fx slower', $pureMs / $gitMs);
+            }
+        } else {
+            $verdict = 'N/A';
+        }
+
+        printf(
+            "  %-35s %10.1f ms %10.1f ms %12s\n",
+            $label,
+            $pureMs,
+            $gitMs,
+            $verdict,
+        );
+    }
+}
+
+$comparison = [];
+
+// 14a. Count all commits — uses readRaw + CommitDataExtractor
+$pureCountStart = hrtime(true);
+$extractor14 = new CommitDataExtractor();
+$allRefsCount = $repo->refs->listRefs('refs/');
+try {
+    $allRefsCount['HEAD'] = $repo->refs->resolve(RefName::head());
+} catch (\Throwable) {
+}
+$visitedCount = [];
+$queueCount = new \SplQueue();
+foreach ($allRefsCount as $cid) {
+    if (! isset($visitedCount[$cid->hash])) {
+        $visitedCount[$cid->hash] = true;
+        $queueCount->enqueue($cid->hash);
+    }
+}
+$pureCount = 0;
+while (! $queueCount->isEmpty()) {
+    $chex = $queueCount->dequeue();
+    $craw = $repo->objects->readRaw(ObjectId::fromTrustedHex($chex));
+    if ($craw->type === ObjectType::Tag) {
+        $ctarget = $extractor14->extractTagTarget($craw);
+        if ($ctarget !== null && ! isset($visitedCount[$ctarget])) {
+            $visitedCount[$ctarget] = true;
+            $queueCount->enqueue($ctarget);
+        }
+        continue;
+    }
+    $cdata = $extractor14->extract($craw);
+    if ($cdata === null) {
+        continue;
+    }
+    $pureCount++;
+    foreach ($cdata['parents'] as $cp) {
+        if (! isset($visitedCount[$cp])) {
+            $visitedCount[$cp] = true;
+            $queueCount->enqueue($cp);
+        }
+    }
+}
+$pureCountMs = (hrtime(true) - $pureCountStart) / 1_000_000;
+
+[$gitCountMs] = gitBench($repoPath, 'rev-list --count --all');
+$comparison['Count all commits (BFS)'] = [$pureCountMs, $gitCountMs];
+
+// 14b. Write commit-graph
+$pureWriteStart = hrtime(true);
+$handler2 = new \Lukasojd\PureGit\Application\Handler\CommitGraphHandler($repo);
+$handler2->write();
+$pureWriteMs = (hrtime(true) - $pureWriteStart) / 1_000_000;
+
+// Remove our graph before git writes its own
+@unlink($repoPath . '/objects/info/commit-graph');
+[$gitWriteMs] = gitBench($repoPath, 'commit-graph write');
+$comparison['Write commit-graph'] = [$pureWriteMs, $gitWriteMs];
+
+// 14c. Count with commit-graph (PureGit: read from graph; Git: rev-list with graph)
+// First write both graphs
+@unlink($repoPath . '/objects/info/commit-graph');
+$handler2->write();
+$pureGraphStart = hrtime(true);
+$graphReader = new \Lukasojd\PureGit\Infrastructure\CommitGraph\CommitGraphReader(
+    $repoPath . '/objects/info/commit-graph',
+);
+$graphReader->getCommitCount();
+$pureGraphMs = (hrtime(true) - $pureGraphStart) / 1_000_000;
+
+// Remove our graph, let git write its own, then time rev-list --count
+@unlink($repoPath . '/objects/info/commit-graph');
+exec(sprintf('git -C %s commit-graph write 2>/dev/null', escapeshellarg($repoPath)));
+[$gitGraphCountMs] = gitBench($repoPath, 'rev-list --count --all');
+$comparison['Count commits (with graph)'] = [$pureGraphMs, $gitGraphCountMs];
+
+// 14d. Log: last 100 commits
+$pureLogStart = hrtime(true);
+$logHandler = new \Lukasojd\PureGit\Application\Handler\LogHandler($repo);
+$logHandler->handle(100);
+$pureLogMs = (hrtime(true) - $pureLogStart) / 1_000_000;
+
+[$gitLogMs] = gitBench($repoPath, 'log --oneline -100');
+$comparison['Log 100 commits'] = [$pureLogMs, $gitLogMs];
+
+// 14e. Log: last 1000 commits
+$pureLog1kStart = hrtime(true);
+$logHandler->handle(1000);
+$pureLog1kMs = (hrtime(true) - $pureLog1kStart) / 1_000_000;
+
+[$gitLog1kMs] = gitBench($repoPath, 'log --oneline -1000');
+$comparison['Log 1000 commits'] = [$pureLog1kMs, $gitLog1kMs];
+
+// 14f. List all refs
+$pureRefsStart = hrtime(true);
+$repo->refs->listRefs('refs/');
+$pureRefsMs = (hrtime(true) - $pureRefsStart) / 1_000_000;
+
+[$gitRefsMs] = gitBench($repoPath, 'for-each-ref');
+$comparison['List all refs'] = [$pureRefsMs, $gitRefsMs];
+
+// 14g. Resolve HEAD
+$pureHeadStart = hrtime(true);
+$repo->refs->resolve(RefName::head());
+$pureHeadMs = (hrtime(true) - $pureHeadStart) / 1_000_000;
+
+[$gitHeadMs] = gitBench($repoPath, 'rev-parse HEAD');
+$comparison['Resolve HEAD'] = [$pureHeadMs, $gitHeadMs];
+
+// 14h. Read HEAD tree (ls-tree)
+$pureTreeStart = hrtime(true);
+$headForTree = $repo->objects->read($repo->refs->resolve(RefName::head()));
+assert($headForTree instanceof Commit);
+$treeForBench = $repo->objects->read($headForTree->treeId);
+assert($treeForBench instanceof Tree);
+$treeFileCount = 0;
+$walkForBench = function (ObjectId $tid) use ($repo, &$walkForBench, &$treeFileCount): void {
+    $t = $repo->objects->read($tid);
+    assert($t instanceof Tree);
+    foreach ($t->entries as $e) {
+        if ($e->isTree()) {
+            $walkForBench($e->objectId);
+        } else {
+            $treeFileCount++;
+        }
+    }
+};
+$walkForBench($headForTree->treeId);
+$pureTreeMs = (hrtime(true) - $pureTreeStart) / 1_000_000;
+
+[$gitTreeMs] = gitBench($repoPath, 'ls-tree -r HEAD');
+$comparison['Walk HEAD tree (recursive)'] = [$pureTreeMs, $gitTreeMs];
+
+comparisonTable('Operation', $comparison);
+
+// Clean up: remove git's commit-graph and restore ours
+@unlink($repoPath . '/objects/info/commit-graph');
+$handler2->write();
 
 echo "\n" . str_repeat('-', 90) . "\n";
 printf("Peak memory: %.1f MB\n", memory_get_peak_usage(true) / 1024 / 1024);

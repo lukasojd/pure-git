@@ -16,4 +16,17 @@ interface ObjectStorageInterface
     public function exists(ObjectId $id): bool;
 
     public function readRaw(ObjectId $id): RawObject;
+
+    /**
+     * Read raw object with data potentially truncated to just the header.
+     * For commit/tag: data may end at the first "\n\n". Other types: same as readRaw().
+     */
+    public function readRawHeader(ObjectId $id): RawObject;
+
+    /**
+     * Same as readRawHeader but accepts a 20-byte binary hash, avoiding ObjectId creation overhead.
+     *
+     * @param string $binHash 20-byte raw hash
+     */
+    public function readRawHeaderByBinary(string $binHash): RawObject;
 }

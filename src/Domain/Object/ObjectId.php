@@ -29,6 +29,14 @@ final readonly class ObjectId implements Stringable
         return new self($hex);
     }
 
+    /**
+     * @internal For performance-critical paths where hex is known to be valid (e.g. from git object store).
+     */
+    public static function fromTrustedHex(string $hex): self
+    {
+        return new self($hex);
+    }
+
     public static function fromBinary(string $binary): self
     {
         if (strlen($binary) !== 20) {

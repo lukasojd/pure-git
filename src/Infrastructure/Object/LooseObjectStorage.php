@@ -65,6 +65,16 @@ final readonly class LooseObjectStorage implements ObjectStorageInterface
         return file_exists($this->objectPath($id));
     }
 
+    public function readRawHeader(ObjectId $id): RawObject
+    {
+        return $this->readRaw($id);
+    }
+
+    public function readRawHeaderByBinary(string $binHash): RawObject
+    {
+        return $this->readRawHeader(ObjectId::fromBinary($binHash));
+    }
+
     public function readRaw(ObjectId $id): RawObject
     {
         $path = $this->objectPath($id);

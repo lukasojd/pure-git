@@ -61,13 +61,19 @@ final class PackfileReader
         $handle = $this->getHandle();
         fseek($handle, $offset);
 
-        $byte = $this->readByte($handle);
+        $buf = fread($handle, 512);
+        if ($buf === false || $buf === '') {
+            return null;
+        }
+
+        $byte = ord($buf[0]);
         $type = ($byte >> 4) & 0x07;
         $size = $byte & 0x0F;
         $shift = 4;
+        $pos = 1;
 
         while (($byte & 0x80) !== 0) {
-            $byte = $this->readByte($handle);
+            $byte = ord($buf[$pos++]);
             $size |= ($byte & 0x7F) << $shift;
             $shift += 7;
         }
@@ -76,7 +82,7 @@ final class PackfileReader
             return null;
         }
 
-        return $this->readDeltaReuseInfo($handle, $offset, $size);
+        return $this->readDeltaReuseInfo($handle, substr($buf, $pos), $offset, $size);
     }
 
     public function readObject(ObjectId $id): RawObject
@@ -89,6 +95,34 @@ final class PackfileReader
         return $this->readAtOffset($offset);
     }
 
+    public function tryReadObject(ObjectId $id): ?RawObject
+    {
+        $offset = $this->indexReader->findOffset($id);
+        if ($offset === null) {
+            return null;
+        }
+
+        return $this->readAtOffset($offset);
+    }
+
+    public function tryReadObjectHeader(ObjectId $id): ?RawObject
+    {
+        return $this->tryReadObjectHeaderByBinary($id->toBinary());
+    }
+
+    /**
+     * @param string $binHash 20-byte raw hash
+     */
+    public function tryReadObjectHeaderByBinary(string $binHash): ?RawObject
+    {
+        $offset = $this->indexReader->findOffsetByBinary($binHash);
+        if ($offset === null) {
+            return null;
+        }
+
+        return $this->readAtOffsetHeaderOnly($offset);
+    }
+
     public function hasObject(ObjectId $id): bool
     {
         return $this->indexReader->hasObject($id);
@@ -99,45 +133,64 @@ final class PackfileReader
         $handle = $this->getHandle();
         fseek($handle, $offset);
 
-        $byte = $this->readByte($handle);
+        $buf = fread($handle, 512);
+        if ($buf === false || $buf === '') {
+            throw new InvalidObjectException('Unexpected end of pack data');
+        }
+
+        $byte = ord($buf[0]);
         $type = ($byte >> 4) & 0x07;
         $size = $byte & 0x0F;
         $shift = 4;
+        $pos = 1;
 
         while (($byte & 0x80) !== 0) {
-            $byte = $this->readByte($handle);
+            $byte = ord($buf[$pos++]);
             $size |= ($byte & 0x7F) << $shift;
             $shift += 7;
         }
 
+        // Remaining bytes in buffer after varint = start of compressed/delta data
+        $remainingBuf = substr($buf, $pos);
+
+        if ($type === self::OBJ_OFS_DELTA) {
+            return $this->readOfsDeltaFromBuffer($handle, $remainingBuf, $size, $offset);
+        }
+
         return match ($type) {
-            self::OBJ_COMMIT, self::OBJ_TREE, self::OBJ_BLOB, self::OBJ_TAG => $this->readWholeObject($handle, $type, $size),
-            self::OBJ_OFS_DELTA => $this->readOfsDelta($handle, $offset, $size),
-            self::OBJ_REF_DELTA => $this->readRefDelta($handle, $size),
+            self::OBJ_COMMIT, self::OBJ_TREE, self::OBJ_BLOB, self::OBJ_TAG => $this->readWholeObject($handle, $type, $size, $remainingBuf),
+            self::OBJ_REF_DELTA => $this->readRefDelta($handle, $size, $remainingBuf),
             default => throw new InvalidObjectException(sprintf('Unknown pack object type: %d', $type)),
         };
     }
 
     /**
-     * @param resource $handle
+     * @param resource $handle positioned at end of initial read buffer
+     * @param string $remainingBuf buffer bytes after object header (OFS varint + compressed data)
      */
-    private function readDeltaReuseInfo($handle, int $currentOffset, int $deltaSize): ?DeltaReuseInfo
+    private function readDeltaReuseInfo($handle, string $remainingBuf, int $currentOffset, int $deltaSize): ?DeltaReuseInfo
     {
-        $byte = $this->readByte($handle);
+        if ($remainingBuf === '') {
+            return null;
+        }
+
+        $pos = 0;
+        $byte = ord($remainingBuf[$pos++]);
         $negativeOffset = $byte & 0x7F;
 
         while (($byte & 0x80) !== 0) {
-            $byte = $this->readByte($handle);
+            $byte = ord($remainingBuf[$pos++]);
             $negativeOffset = (($negativeOffset + 1) << 7) | ($byte & 0x7F);
         }
 
         $baseOffset = $currentOffset - $negativeOffset;
         $baseId = $this->indexReader->findObjectAtOffset($baseOffset);
-        if (! $baseId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId) {
+        if (! $baseId instanceof ObjectId) {
             return null;
         }
 
-        $deltaData = $this->readCompressedData($handle, $deltaSize);
+        $compressedBuf = substr($remainingBuf, $pos);
+        $deltaData = $this->readCompressedData($handle, $deltaSize, $compressedBuf);
 
         return new DeltaReuseInfo(baseId: $baseId, deltaData: $deltaData);
     }
@@ -145,29 +198,39 @@ final class PackfileReader
     /**
      * @param resource $handle
      */
-    private function readWholeObject($handle, int $type, int $size): RawObject
+    private function readWholeObject($handle, int $type, int $size, string $initialBuffer): RawObject
     {
         $objectType = $this->packTypeToObjectType($type);
-        $data = $this->readCompressedData($handle, $size);
+        $data = $this->readCompressedData($handle, $size, $initialBuffer);
 
         return new RawObject($objectType, $size, $data);
     }
 
     /**
-     * @param resource $handle
+     * @param resource $handle positioned at offset + 32 (end of initial buffer)
+     * @param string $remainingBuf buffer bytes after object header varint (OFS varint + compressed data)
+     * @param int $currentOffset absolute file offset of this object
      */
-    private function readOfsDelta($handle, int $currentOffset, int $deltaSize): RawObject
-    {
-        $byte = $this->readByte($handle);
+    private function readOfsDeltaFromBuffer(
+        $handle,
+        string $remainingBuf,
+        int $deltaSize,
+        int $currentOffset,
+    ): RawObject {
+        $pos = 0;
+        $byte = ord($remainingBuf[$pos++]);
         $negativeOffset = $byte & 0x7F;
 
         while (($byte & 0x80) !== 0) {
-            $byte = $this->readByte($handle);
+            $byte = ord($remainingBuf[$pos++]);
             $negativeOffset = (($negativeOffset + 1) << 7) | ($byte & 0x7F);
         }
 
+        // Pass remaining buffer (after OFS varint) as initial inflate data
+        $compressedBuf = substr($remainingBuf, $pos);
+
         $baseOffset = $currentOffset - $negativeOffset;
-        $deltaData = $this->readCompressedData($handle, $deltaSize);
+        $deltaData = $this->readCompressedData($handle, $deltaSize, $compressedBuf);
 
         $baseObject = $this->readAtOffset($baseOffset);
 
@@ -179,21 +242,143 @@ final class PackfileReader
     /**
      * @param resource $handle
      */
-    private function readRefDelta($handle, int $deltaSize): RawObject
+    private function readRefDelta($handle, int $deltaSize, string $remainingBuf): RawObject
     {
-        $baseHash = fread($handle, 20);
-        if ($baseHash === false || strlen($baseHash) !== 20) {
+        // Buffer has 20-byte base hash + start of compressed data
+        if (strlen($remainingBuf) >= 20) {
+            $baseHash = substr($remainingBuf, 0, 20);
+            $compressedBuf = substr($remainingBuf, 20);
+        } else {
+            // Buffer too short (unlikely) — fall back to reading from handle
+            $need = 20 - strlen($remainingBuf);
+            $extra = fread($handle, $need);
+            if ($extra === false) {
+                throw new InvalidObjectException('Failed to read ref delta base hash');
+            }
+            $baseHash = $remainingBuf . $extra;
+            $compressedBuf = '';
+        }
+
+        if (strlen($baseHash) !== 20) {
             throw new InvalidObjectException('Failed to read ref delta base hash');
         }
 
         $baseId = ObjectId::fromBinary($baseHash);
-        $deltaData = $this->readCompressedData($handle, $deltaSize);
+        $deltaData = $this->readCompressedData($handle, $deltaSize, $compressedBuf);
 
         $baseObject = $this->readObject($baseId);
 
         $result = DeltaDecoder::apply($baseObject->data, $deltaData);
 
         return new RawObject($baseObject->type, strlen($result), $result);
+    }
+
+    private function readAtOffsetHeaderOnly(int $offset): RawObject
+    {
+        $handle = $this->getHandle();
+        fseek($handle, $offset);
+
+        $buf = fread($handle, 512);
+        if ($buf === false || $buf === '') {
+            throw new InvalidObjectException('Unexpected end of pack data');
+        }
+
+        $byte = ord($buf[0]);
+        $type = ($byte >> 4) & 0x07;
+        $size = $byte & 0x0F;
+        $shift = 4;
+        $pos = 1;
+
+        while (($byte & 0x80) !== 0) {
+            $byte = ord($buf[$pos++]);
+            $size |= ($byte & 0x7F) << $shift;
+            $shift += 7;
+        }
+
+        $remainingBuf = substr($buf, $pos);
+
+        // Only partial inflate for whole commit/tag objects
+        if ($type === self::OBJ_COMMIT || $type === self::OBJ_TAG) {
+            return $this->readHeaderOnly($handle, $type, $size, $remainingBuf);
+        }
+
+        // Delta and other types: fall back to full decompression
+        if ($type === self::OBJ_OFS_DELTA) {
+            return $this->readOfsDeltaFromBuffer($handle, $remainingBuf, $size, $offset);
+        }
+
+        return match ($type) {
+            self::OBJ_TREE, self::OBJ_BLOB => $this->readWholeObject($handle, $type, $size, $remainingBuf),
+            self::OBJ_REF_DELTA => $this->readRefDelta($handle, $size, $remainingBuf),
+            default => throw new InvalidObjectException(sprintf('Unknown pack object type: %d', $type)),
+        };
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function readHeaderOnly($handle, int $type, int $size, string $initialBuffer): RawObject
+    {
+        $context = inflate_init(ZLIB_ENCODING_DEFLATE);
+        if ($context === false) {
+            throw new InvalidObjectException('Failed to init zlib inflate');
+        }
+
+        $objectType = $this->packTypeToObjectType($type);
+        $data = $this->inflateUntilHeaderEnd($handle, $size, $initialBuffer, $context);
+
+        return new RawObject($objectType, $size, $data);
+    }
+
+    /**
+     * Inflate data until "\n\n" header boundary is found or full data is decompressed.
+     *
+     * @param resource $handle
+     */
+    private function inflateUntilHeaderEnd($handle, int $expectedSize, string $initialBuffer, \InflateContext $context): string
+    {
+        $output = '';
+
+        if ($initialBuffer !== '') {
+            $output = $this->inflateChunk($context, $initialBuffer);
+            $truncated = $this->truncateAtHeaderEnd($output);
+            if ($truncated !== null || strlen($output) >= $expectedSize) {
+                return $truncated ?? $output;
+            }
+        }
+
+        while (strlen($output) < $expectedSize) {
+            $compressed = fread($handle, 256);
+            if ($compressed === false || $compressed === '') {
+                return $output;
+            }
+
+            $decompressed = $this->inflateChunk($context, $compressed);
+            $output .= $decompressed;
+            $truncated = $this->truncateAtHeaderEnd($output);
+            if ($truncated !== null) {
+                return $truncated;
+            }
+        }
+
+        return $output;
+    }
+
+    private function inflateChunk(\InflateContext $context, string $compressed): string
+    {
+        $decompressed = inflate_add($context, $compressed, ZLIB_SYNC_FLUSH);
+        if ($decompressed === false) {
+            throw new InvalidObjectException('Failed to decompress pack data');
+        }
+
+        return $decompressed;
+    }
+
+    private function truncateAtHeaderEnd(string $output): ?string
+    {
+        $headerEnd = strpos($output, "\n\n");
+
+        return $headerEnd !== false ? substr($output, 0, $headerEnd + 2) : null;
     }
 
     private function packTypeToObjectType(int $type): ObjectType
@@ -210,7 +395,7 @@ final class PackfileReader
     /**
      * @param resource $handle
      */
-    private function readCompressedData($handle, int $expectedSize): string
+    private function readCompressedData($handle, int $expectedSize, string $initialBuffer = ''): string
     {
         $context = inflate_init(ZLIB_ENCODING_DEFLATE);
         if ($context === false) {
@@ -219,6 +404,16 @@ final class PackfileReader
 
         $chunks = [];
         $totalSize = 0;
+
+        if ($initialBuffer !== '') {
+            $decompressed = inflate_add($context, $initialBuffer, ZLIB_SYNC_FLUSH);
+            if ($decompressed === false) {
+                throw new InvalidObjectException('Failed to decompress pack data');
+            }
+
+            $chunks[] = $decompressed;
+            $totalSize += strlen($decompressed);
+        }
 
         while ($totalSize < $expectedSize) {
             $chunkSize = max(1, min(65536, $expectedSize - $totalSize + 512));
@@ -237,19 +432,6 @@ final class PackfileReader
         }
 
         return implode('', $chunks);
-    }
-
-    /**
-     * @param resource $handle
-     */
-    private function readByte($handle): int
-    {
-        $byte = fread($handle, 1);
-        if ($byte === false || $byte === '') {
-            throw new InvalidObjectException('Unexpected end of pack data');
-        }
-
-        return ord($byte);
     }
 
     /**

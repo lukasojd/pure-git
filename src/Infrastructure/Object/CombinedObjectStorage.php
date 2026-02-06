@@ -71,12 +71,33 @@ final class CombinedObjectStorage implements ObjectStorageInterface
 
         $this->ensurePacksLoaded();
         foreach ($this->packReaders as $reader) {
-            if ($reader->hasObject($id)) {
-                return $reader->readObject($id);
+            $raw = $reader->tryReadObject($id);
+            if ($raw !== null) {
+                return $raw;
             }
         }
 
         throw ObjectNotFoundException::withId($id->hash);
+    }
+
+    public function readRawHeader(ObjectId $id): RawObject
+    {
+        return $this->readRawHeaderByBinary($id->toBinary());
+    }
+
+    public function readRawHeaderByBinary(string $binHash): RawObject
+    {
+        // Check packs first — avoids file_exists() for the common case where
+        // all objects are packed. Safe because objects are content-addressed.
+        $this->ensurePacksLoaded();
+        foreach ($this->packReaders as $reader) {
+            $raw = $reader->tryReadObjectHeaderByBinary($binHash);
+            if ($raw !== null) {
+                return $raw;
+            }
+        }
+
+        return $this->looseStorage->readRawHeaderByBinary($binHash);
     }
 
     private function ensurePacksLoaded(): void
