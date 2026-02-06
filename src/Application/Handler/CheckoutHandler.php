@@ -59,14 +59,23 @@ final readonly class CheckoutHandler
             throw new PureGitException('HEAD does not point to a commit');
         }
 
-        $content = $this->findFileInTree($commit->treeId, $path);
-        if ($content === null) {
+        $entry = $this->findEntryInTree($commit->treeId, $path);
+        if (! $entry instanceof \Lukasojd\PureGit\Domain\Object\TreeEntry) {
+            throw new PureGitException(sprintf('File not found in HEAD: %s', $path));
+        }
+
+        $blob = $this->repository->objects->read($entry->objectId);
+        if (! $blob instanceof Blob) {
             throw new PureGitException(sprintf('File not found in HEAD: %s', $path));
         }
 
         $fullPath = $this->repository->workDir . '/' . $path;
         $this->ensureParentDirectory($fullPath);
-        $this->repository->filesystem->write($fullPath, $content);
+        $this->repository->filesystem->write($fullPath, $blob->content);
+
+        if ($entry->mode === \Lukasojd\PureGit\Domain\Object\FileMode::Executable) {
+            chmod($fullPath, 0o755);
+        }
     }
 
     private function updateWorkingTree(ObjectId $commitId): void
@@ -129,11 +138,15 @@ final readonly class CheckoutHandler
         $this->ensureParentDirectory($fullPath);
         $this->repository->filesystem->write($fullPath, $blob->content);
 
+        if ($entry->mode === \Lukasojd\PureGit\Domain\Object\FileMode::Executable) {
+            chmod($fullPath, 0o755);
+        }
+
         $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, strlen($blob->content));
         $index->addEntry($indexEntry);
     }
 
-    private function findFileInTree(ObjectId $treeId, string $path): ?string
+    private function findEntryInTree(ObjectId $treeId, string $path): ?TreeEntry
     {
         $parts = explode('/', $path);
 
@@ -143,7 +156,7 @@ final readonly class CheckoutHandler
     /**
      * @param list<string> $parts
      */
-    private function traverseTreePath(ObjectId $treeId, array $parts, int $depth): ?string
+    private function traverseTreePath(ObjectId $treeId, array $parts, int $depth): ?TreeEntry
     {
         $tree = $this->repository->objects->read($treeId);
         if (! $tree instanceof Tree) {
@@ -156,20 +169,10 @@ final readonly class CheckoutHandler
         }
 
         if ($depth === count($parts) - 1) {
-            return $this->readBlobContent($entry->objectId);
+            return $entry;
         }
 
         return $this->traverseTreePath($entry->objectId, $parts, $depth + 1);
-    }
-
-    private function readBlobContent(ObjectId $objectId): ?string
-    {
-        $blob = $this->repository->objects->read($objectId);
-        if ($blob instanceof Blob) {
-            return $blob->content;
-        }
-
-        return null;
     }
 
     private function ensureParentDirectory(string $fullPath): void

@@ -128,6 +128,32 @@ final class FullWorkflowTest extends TestCase
         self::assertArrayNotHasKey('refs/heads/feature', $branches);
     }
 
+    public function testCheckoutPreservesExecutablePermission(): void
+    {
+        $repo = Repository::init($this->testDir);
+
+        // Create an executable script
+        $scriptPath = $this->testDir . '/run.sh';
+        file_put_contents($scriptPath, "#!/bin/bash\necho hello\n");
+        chmod($scriptPath, 0o755);
+
+        $add = new AddHandler($repo);
+        $add->handle(['run.sh']);
+        $commitHandler = new CommitHandler($repo);
+        $commitHandler->handle('Add executable script');
+
+        // Create branch, switch to it, switch back
+        $branch = new BranchHandler($repo);
+        $branch->create('other');
+        $checkout = new CheckoutHandler($repo);
+        $checkout->checkout('other');
+        $checkout->checkout('main');
+
+        // Executable bit must be preserved after checkout
+        self::assertFileExists($scriptPath);
+        self::assertTrue(is_executable($scriptPath), 'run.sh should be executable after checkout');
+    }
+
     public function testTagOperations(): void
     {
         $repo = Repository::init($this->testDir);
