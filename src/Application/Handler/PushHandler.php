@@ -63,12 +63,18 @@ final readonly class PushHandler
 
         $this->cleanupPackFile($packPath);
 
+        $status = $this->parseResponseStatus($response, $remoteRef);
+
         $refUpdate = new PushRefUpdate(
             refName: $remoteRef,
             oldHash: $oldHash === self::ZERO_HASH ? null : $oldHash,
             newHash: $localId->hash,
-            status: $this->parseResponseStatus($response, $remoteRef),
+            status: $status,
         );
+
+        if (str_starts_with($status, 'ok')) {
+            $this->updateRemoteTrackingRef($remoteName, $remoteRef, $localId);
+        }
 
         return new PushResult(
             upToDate: false,
@@ -365,6 +371,18 @@ final readonly class PushHandler
         }
 
         return 'ok ' . $refName;
+    }
+
+    private function updateRemoteTrackingRef(string $remoteName, string $remoteRef, ObjectId $localId): void
+    {
+        // refs/heads/main → refs/remotes/origin/main
+        if (! str_starts_with($remoteRef, 'refs/heads/')) {
+            return;
+        }
+
+        $shortBranch = substr($remoteRef, strlen('refs/heads/'));
+        $trackingRef = RefName::fromString('refs/remotes/' . $remoteName . '/' . $shortBranch);
+        $this->repository->refs->updateRef($trackingRef, $localId);
     }
 
     private function cleanupPackFile(string $packPath): void

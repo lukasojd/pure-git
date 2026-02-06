@@ -135,6 +135,44 @@ final class PushHandlerTest extends TestCase
         self::assertSame('refs/heads/new-branch', $result->refUpdates[0]->refName);
     }
 
+    public function testPushUpdatesRemoteTrackingRef(): void
+    {
+        [$localRepo, $remoteDir] = $this->setupLocalAndRemote();
+
+        // Add a new commit locally
+        file_put_contents($localRepo->workDir . '/tracking.txt', 'tracking test');
+        $addHandler = new AddHandler($localRepo);
+        $addHandler->handle(['tracking.txt']);
+        $commitHandler = new CommitHandler($localRepo);
+        $commitHandler->handle('Tracking commit', new PersonInfo('Test', 'test@test.com', new DateTimeImmutable()));
+
+        $localId = $localRepo->refs->resolve(\Lukasojd\PureGit\Domain\Ref\RefName::head());
+
+        $handler = new PushHandler($localRepo);
+        $handler->push('origin');
+
+        // Remote-tracking ref should be updated
+        $trackingRef = \Lukasojd\PureGit\Domain\Ref\RefName::fromString('refs/remotes/origin/main');
+        self::assertTrue($localRepo->refs->exists($trackingRef));
+        self::assertTrue($localRepo->refs->resolve($trackingRef)->equals($localId));
+    }
+
+    public function testPushNewBranchCreatesRemoteTrackingRef(): void
+    {
+        [$localRepo, $remoteDir] = $this->setupLocalAndRemote();
+
+        $headId = $localRepo->refs->resolve(\Lukasojd\PureGit\Domain\Ref\RefName::head());
+        $localRepo->refs->updateRef(\Lukasojd\PureGit\Domain\Ref\RefName::branch('feature'), $headId);
+
+        $handler = new PushHandler($localRepo);
+        $handler->push('origin', 'feature');
+
+        // Remote-tracking ref should exist
+        $trackingRef = \Lukasojd\PureGit\Domain\Ref\RefName::fromString('refs/remotes/origin/feature');
+        self::assertTrue($localRepo->refs->exists($trackingRef));
+        self::assertTrue($localRepo->refs->resolve($trackingRef)->equals($headId));
+    }
+
     /**
      * @return array{Repository, string}
      */
