@@ -2,12 +2,14 @@
 
 ## Test Setup
 
-- **Repo**: PHPUnit bare clone, 231 MB, 27,311 commits
-- **Path**: `/private/tmp/pure-git-clone`
 - **PHP**: 8.4.12, macOS Darwin 25.1.0 (Apple Silicon)
-- **Native git**: `rev-list --all --count` = **120ms** (warm cache median)
+- **Repos tested**:
+  - PHPUnit bare clone: 231 MB, 27,311 commits
+  - Linux kernel bare clone: 6.1 GB, 1,414,354 commits (52x larger)
 
 ## Final Performance
+
+### PHPUnit repo (27K commits)
 
 | Metric | Value |
 |--------|-------|
@@ -16,7 +18,30 @@
 | **Peak memory** | 101.8 MB |
 | **Per-commit** | 10.4 us |
 
-### Full Progression
+### Linux kernel (1.4M commits)
+
+| Metric | Value |
+|--------|-------|
+| **BFS median (warm)** | **19,200ms** |
+| **Native git** | **6,350ms** |
+| **Ratio vs git** | **3.0x** |
+| **Peak memory** | 2,087 MB |
+| **Per-commit** | 13.6 us |
+| **Commit-graph read** | **114ms** (vs 19.2s BFS = **168x speedup**) |
+
+### Scaling comparison
+
+| Repo | Commits | PureGit BFS | Native git | Ratio | Per-commit |
+|------|---------|------------|-----------|-------|------------|
+| **PHPUnit** | 27K | 283ms | 120ms | **2.4x** | 10.4 us |
+| **Linux kernel** | 1.4M | 19,200ms | 6,350ms | **3.0x** | 13.6 us |
+
+The ratio degrades from 2.4x to 3.0x at scale due to:
+- PHP hash table overhead for 2M+ entries (hash map ~300MB for 2M objects)
+- More delta objects requiring full resolve chains at scale
+- Memory allocation pressure (2GB peak vs 100MB)
+
+## Optimization Progression (PHPUnit repo)
 
 | Version | BFS | Ratio | Change |
 |---------|-----|-------|--------|
@@ -46,6 +71,10 @@ Added `findOffsetByBinary(string $binHash)` and `readRawHeaderByBinary(string $b
 to avoid ObjectId creation in hot paths. BFS in CommitGraphWriter uses `hex2bin()` directly
 instead of `ObjectId::fromTrustedHex()`. Saves ~27ms.
 
+### 5. Large Offset Table Support (PackIndexReader)
+Pack index v2 large offset table for pack files >2GB. Required for Linux kernel (5.7GB pack).
+When MSB of 4-byte offset is set, lower 31 bits index into 8-byte large offset table.
+
 ### Rejected Optimizations
 
 | Optimization | Result | Why |
@@ -53,7 +82,7 @@ instead of `ObjectId::fromTrustedHex()`. Saves ~27ms.
 | **Block cache (64KB FIFO)** | REJECTED | Adds overhead vs kernel page cache; fseek+fread(512) is fast enough |
 | **zlib_decode() / gzuncompress()** | REJECTED | Slower than inflate_init+inflate_add AND fails on ~46% of buffers (can't handle trailing data after deflate stream) |
 
-## Per-Component Breakdown (warm cache, measured at 310ms stage)
+## Per-Component Breakdown (PHPUnit, warm cache, at 310ms stage)
 
 | Component | Time | % | Calls | Per-call |
 |-----------|------|---|-------|----------|
@@ -67,20 +96,9 @@ instead of `ObjectId::fromTrustedHex()`. Saves ~27ms.
 | queue + visited | 10ms | 3% | 27K | 0.4 us |
 | hrtime + loop overhead | 51ms | 17% | - | - |
 
-## Object Breakdown
-
-| Category | Count | Note |
-|----------|-------|------|
-| Whole commit/tag | 27,713 | Direct inflate from pack |
-| -- truncated at `\n\n` | 17,944 | Partial decompression helps output size |
-| -- full inflate | 9,769 | Small objects fully decompressed in 1 call |
-| Delta fallback (OFS_DELTA) | 582 | Need full resolve chain |
-| **Avg compressed** | **509 B** | Fits in 512B initial buffer |
-| **Avg decompressed** | **435 B** | Header-only truncation |
-
 ## Remaining Bottlenecks
 
-**Theoretical floor** (only inflate_add + fseek/fread): ~95ms. The remaining ~190ms is PHP
+**Theoretical floor** (only inflate_add + fseek/fread): ~95ms (PHPUnit). The remaining ~190ms is PHP
 overhead (hash lookups, function calls, string operations). Getting below 2x native git
 would require FFI or a PHP extension.
 
@@ -88,6 +106,7 @@ would require FFI or a PHP extension.
 
 | Optimization | Expected savings | Effort |
 |-------------|-----------------|--------|
-| BFS-aware readahead buffer | ~10-15ms | Medium |
+| BFS-aware readahead buffer | ~10-15ms (PHPUnit) | Medium |
 | PHP FFI for zlib (single uncompress()) | ~5-10ms | High |
 | mmap via FFI (eliminate fseek/fread) | ~30ms | High |
+| Reduce hash map memory for large repos | ~500MB less at 2M objects | Medium |

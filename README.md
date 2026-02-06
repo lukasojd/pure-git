@@ -5,7 +5,7 @@ A fully functional Git-like VCS implementation in **pure PHP** — no external `
 ## Requirements
 
 - PHP 8.4+
-- Extensions: `ext-hash`, `ext-zlib`, `ext-json`, `ext-mbstring`, `ext-ctype`
+- Extensions: `ext-hash`, `ext-zlib`, `ext-json`, `ext-mbstring`, `ext-ctype`, `ext-curl`
 
 ## Installation
 
@@ -57,6 +57,14 @@ bin/puregit reset [--soft|--mixed|--hard] <commit>
 
 # Show object
 bin/puregit show [<object>]
+
+# Clone a repository (HTTP/HTTPS or git:// protocol)
+bin/puregit clone <url> [<directory>]
+bin/puregit clone --bare <url> [<directory>]
+
+# Commit graph (fast commit counting)
+bin/puregit commit-graph write
+bin/puregit commit-graph verify
 
 # Remove / Move files
 bin/puregit rm [--cached] <file>...
@@ -118,7 +126,9 @@ composer test:coverage # tests with coverage report
 
 ## Performance
 
-Delta encoding with sliding window (window=10, max depth=50) achieves ~77% compression ratio on similar objects. Packs use OFS_DELTA format. Transport streams packs directly to disk for minimal memory usage.
+Delta encoding with sliding window (window=10, max depth=50) achieves ~77% compression ratio on similar objects. Packs use OFS_DELTA format. Transport streams packs directly to disk with a bounded FIFO cache (32 MB) for index building, keeping memory usage predictable regardless of repository size.
+
+### Local operations
 
 Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 
@@ -128,10 +138,19 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 | Walk 3576 files | 10 ms | 34 MB |
 | Log 1000 commits | 13 ms | 34 MB |
 | Read all blobs | 235 ms | 92 MB |
+| Count all commits (commit-graph) | 2 ms | 36 MB |
+| Count all commits (BFS) | 283 ms | 62 MB |
+
+### Clone (HTTP transport)
+
+| Repository | Objects | PureGit | Native git | Ratio | Peak Memory |
+|---|---|---|---|---|---|
+| defunkt/dotjs | 872 | 0.84 s | 0.70 s | 1.2x | < 32 MB |
+| sebastianbergmann/phpunit | 232K | 25.1 s | 9.8 s | 2.6x | < 256 MB |
 
 ## Limitations
 
-- Transport layer currently supports local path cloning only
+- No SSH transport (HTTP/HTTPS and `git://` only)
 - No `.gitignore` support yet
 - No submodule support
 - No sparse checkout

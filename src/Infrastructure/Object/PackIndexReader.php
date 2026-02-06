@@ -39,6 +39,13 @@ final class PackIndexReader
 
     private int $offsetsOffset = 0;
 
+    private int $largeOffsetsOffset = 0;
+
+    /**
+     * In-memory large offset table (8-byte big-endian entries for offsets > 2GB).
+     */
+    private ?string $largeOffsetTable = null;
+
     /**
      * @var resource|null
      */
@@ -189,7 +196,7 @@ final class PackIndexReader
             $hash = substr($this->hashTable, $i * self::HASH_SIZE, self::HASH_SIZE);
             /** @var array{o: int} $off */
             $off = unpack('No', $this->offsetTable, $i * self::OFFSET_SIZE);
-            $map[$off['o']] = bin2hex($hash);
+            $map[$this->resolveOffset($off['o'])] = bin2hex($hash);
         }
 
         $this->offsetToHash = $map;
@@ -228,6 +235,8 @@ final class PackIndexReader
         $this->offsetsOffset = $this->hashesOffset
             + ($this->totalObjects * self::HASH_SIZE)
             + ($this->totalObjects * self::CRC_SIZE);
+        $this->largeOffsetsOffset = $this->offsetsOffset
+            + ($this->totalObjects * self::OFFSET_SIZE);
 
         $this->fh = $fh;
         $this->initialized = true;
@@ -261,6 +270,7 @@ final class PackIndexReader
         if ($fh === null || $this->totalObjects === 0) {
             $this->hashTable = '';
             $this->offsetTable = '';
+            $this->largeOffsetTable = '';
 
             return;
         }
@@ -273,6 +283,35 @@ final class PackIndexReader
 
         fseek($fh, $this->offsetsOffset);
         $this->offsetTable = (string) fread($fh, $offsetBytes);
+
+        // Large offset table starts right after the 4-byte offset table.
+        // Read remaining bytes before the trailing checksums (40 bytes = 2x SHA-1).
+        $this->loadLargeOffsetTable($fh);
+    }
+
+    /**
+     * @param resource $fh
+     */
+    private function loadLargeOffsetTable($fh): void
+    {
+        $this->largeOffsetsOffset = $this->offsetsOffset + ($this->totalObjects * self::OFFSET_SIZE);
+        $stat = fstat($fh);
+        if ($stat === false) {
+            $this->largeOffsetTable = '';
+
+            return;
+        }
+
+        // File ends with: large_offsets + pack_checksum(20) + index_checksum(20)
+        $largeOffsetBytes = $stat['size'] - $this->largeOffsetsOffset - 40;
+        if ($largeOffsetBytes <= 0) {
+            $this->largeOffsetTable = '';
+
+            return;
+        }
+
+        fseek($fh, $this->largeOffsetsOffset);
+        $this->largeOffsetTable = (string) fread($fh, $largeOffsetBytes);
     }
 
     /**
@@ -333,7 +372,7 @@ final class PackIndexReader
         for ($i = 0; $i < $this->totalObjects; $i++) {
             /** @var array{o: int} $off */
             $off = unpack('No', $offsetTable, $i * self::OFFSET_SIZE);
-            $map[substr($hashTable, $i * self::HASH_SIZE, self::HASH_SIZE)] = $off['o'];
+            $map[substr($hashTable, $i * self::HASH_SIZE, self::HASH_SIZE)] = $this->resolveOffset($off['o']);
         }
 
         $this->hashMap = $map;
@@ -350,6 +389,28 @@ final class PackIndexReader
         /** @var array{o: int} $off */
         $off = unpack('No', $this->offsetTable, $position * self::OFFSET_SIZE);
 
-        return $off['o'];
+        return $this->resolveOffset($off['o']);
+    }
+
+    /**
+     * Resolve a 4-byte pack index offset. If MSB is set, the lower 31 bits
+     * are an index into the large offset table (8-byte entries for packs > 2GB).
+     */
+    private function resolveOffset(int $rawOffset): int
+    {
+        if (($rawOffset & 0x80000000) === 0) {
+            return $rawOffset;
+        }
+
+        $largeIndex = $rawOffset & 0x7FFFFFFF;
+
+        if ($this->largeOffsetTable === null || $this->largeOffsetTable === '') {
+            return $rawOffset;
+        }
+
+        /** @var array{hi: int, lo: int} $parts */
+        $parts = unpack('Nhi/Nlo', $this->largeOffsetTable, $largeIndex * 8);
+
+        return ($parts['hi'] << 32) | $parts['lo'];
     }
 }

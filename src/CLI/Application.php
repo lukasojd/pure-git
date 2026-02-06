@@ -8,6 +8,7 @@ use Lukasojd\PureGit\CLI\Command\AddCommand;
 use Lukasojd\PureGit\CLI\Command\BranchCommand;
 use Lukasojd\PureGit\CLI\Command\CheckoutCommand;
 use Lukasojd\PureGit\CLI\Command\CliCommand;
+use Lukasojd\PureGit\CLI\Command\CloneCommand;
 use Lukasojd\PureGit\CLI\Command\CommitCommand;
 use Lukasojd\PureGit\CLI\Command\CommitGraphCommand;
 use Lukasojd\PureGit\CLI\Command\DiffCommand;
@@ -47,6 +48,7 @@ final class Application
         $this->registerCommand(new RmCommand());
         $this->registerCommand(new MvCommand());
         $this->registerCommand(new CommitGraphCommand());
+        $this->registerCommand(new CloneCommand());
     }
 
     /**

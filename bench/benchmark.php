@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-ini_set('memory_limit', '512M');
+ini_set('memory_limit', '4G');
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Lukasojd\PureGit\Application\Handler\CheckoutHandler;
