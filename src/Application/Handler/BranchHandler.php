@@ -6,8 +6,10 @@ namespace Lukasojd\PureGit\Application\Handler;
 
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Exception\PureGitException;
+use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Ref\RefName;
+use Lukasojd\PureGit\Infrastructure\Config\GitConfigReader;
 
 final readonly class BranchHandler
 {
@@ -51,5 +53,87 @@ final readonly class BranchHandler
     public function getCurrentBranch(): ?RefName
     {
         return $this->repository->refs->getSymbolicRef(RefName::head());
+    }
+
+    public function getTrackingInfo(?RefName $branch = null): ?TrackingInfo
+    {
+        $branch ??= $this->getCurrentBranch();
+        if (! $branch instanceof RefName || ! $branch->isBranch()) {
+            return null;
+        }
+
+        $config = new GitConfigReader($this->repository->gitDir . '/config');
+        $upstreamRefPath = $config->getUpstreamRef($branch->shortName());
+
+        if ($upstreamRefPath === null) {
+            return null;
+        }
+
+        $upstreamRef = RefName::fromString($upstreamRefPath);
+        if (! $this->repository->refs->exists($upstreamRef)) {
+            return null;
+        }
+
+        $localId = $this->repository->refs->resolve($branch);
+        $remoteId = $this->repository->refs->resolve($upstreamRef);
+
+        [$ahead, $behind] = $this->countAheadBehind($localId, $remoteId);
+
+        return new TrackingInfo(
+            upstream: $upstreamRef->shortName(),
+            ahead: $ahead,
+            behind: $behind,
+        );
+    }
+
+    /**
+     * @return array{int, int} [ahead, behind]
+     */
+    private function countAheadBehind(ObjectId $localId, ObjectId $remoteId): array
+    {
+        if ($localId->equals($remoteId)) {
+            return [0, 0];
+        }
+
+        // BFS from both sides to find all reachable commits
+        $localReachable = $this->collectAncestors($localId);
+        $remoteReachable = $this->collectAncestors($remoteId);
+
+        $ahead = count(array_diff_key($localReachable, $remoteReachable));
+        $behind = count(array_diff_key($remoteReachable, $localReachable));
+
+        return [$ahead, $behind];
+    }
+
+    /**
+     * @return array<string, bool>
+     */
+    private function collectAncestors(ObjectId $startId): array
+    {
+        /** @var array<string, bool> $visited */
+        $visited = [
+            $startId->hash => true,
+        ];
+        $queue = new \SplQueue();
+        $queue->enqueue($startId);
+
+        while (! $queue->isEmpty()) {
+            /** @var ObjectId $current */
+            $current = $queue->dequeue();
+            $commit = $this->repository->objects->read($current);
+
+            if (! $commit instanceof Commit) {
+                continue;
+            }
+
+            foreach ($commit->parents as $parentId) {
+                if (! isset($visited[$parentId->hash])) {
+                    $visited[$parentId->hash] = true;
+                    $queue->enqueue($parentId);
+                }
+            }
+        }
+
+        return $visited;
     }
 }

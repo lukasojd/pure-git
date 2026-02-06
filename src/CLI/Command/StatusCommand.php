@@ -61,6 +61,10 @@ final class StatusCommand implements CliCommand
 
         if ($currentBranch instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
             fwrite(STDOUT, sprintf("On branch %s\n", $currentBranch->shortName()));
+            $tracking = $branchHandler->getTrackingInfo($currentBranch);
+            if ($tracking instanceof \Lukasojd\PureGit\Application\Handler\TrackingInfo) {
+                fwrite(STDOUT, $tracking->formatMessage() . "\n");
+            }
         } else {
             fwrite(STDOUT, "HEAD detached\n");
         }

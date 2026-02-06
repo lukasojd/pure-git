@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\CLI\Command;
 
+use Lukasojd\PureGit\Application\Handler\BranchHandler;
 use Lukasojd\PureGit\Application\Handler\CheckoutHandler;
+use Lukasojd\PureGit\Application\Handler\CheckoutResult;
 use Lukasojd\PureGit\Application\Service\Repository;
 
 final class CheckoutCommand implements CliCommand
@@ -44,10 +46,31 @@ final class CheckoutCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new CheckoutHandler($repo);
-        $handler->checkout($args[0]);
+        $result = $handler->checkout($args[0]);
 
-        fwrite(STDOUT, sprintf("Switched to '%s'\n", $args[0]));
+        $this->printResult($result, $args[0], $repo);
 
         return 0;
+    }
+
+    private function printResult(CheckoutResult $result, string $target, Repository $repo): void
+    {
+        match ($result) {
+            CheckoutResult::AlreadyOnBranch => fwrite(STDOUT, sprintf("Already on '%s'\n", $target)),
+            CheckoutResult::SwitchedToBranch => fwrite(STDOUT, sprintf("Switched to branch '%s'\n", $target)),
+            CheckoutResult::DetachedHead => fwrite(STDOUT, sprintf("HEAD is now at %s\n", substr($target, 0, 7))),
+        };
+
+        $this->printTrackingInfo($repo);
+    }
+
+    private function printTrackingInfo(Repository $repo): void
+    {
+        $branchHandler = new BranchHandler($repo);
+        $tracking = $branchHandler->getTrackingInfo();
+
+        if ($tracking instanceof \Lukasojd\PureGit\Application\Handler\TrackingInfo) {
+            fwrite(STDOUT, $tracking->formatMessage() . "\n");
+        }
     }
 }

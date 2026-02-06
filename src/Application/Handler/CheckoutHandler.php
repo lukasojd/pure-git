@@ -22,16 +22,12 @@ final readonly class CheckoutHandler
     ) {
     }
 
-    public function checkout(string $target): void
+    public function checkout(string $target): CheckoutResult
     {
         // Try as branch first
         $branchRef = RefName::branch($target);
         if ($this->repository->refs->exists($branchRef)) {
-            $commitId = $this->repository->refs->resolve($branchRef);
-            $this->updateWorkingTree($commitId);
-            $this->repository->refs->updateSymbolicRef(RefName::head(), $branchRef);
-
-            return;
+            return $this->checkoutBranch($branchRef);
         }
 
         // Try as a commit hash
@@ -41,7 +37,7 @@ final readonly class CheckoutHandler
                 $this->updateWorkingTree($commitId);
                 $this->repository->refs->updateRef(RefName::head(), $commitId);
 
-                return;
+                return CheckoutResult::DetachedHead;
             }
         } catch (\Throwable) {
             // Not a valid hash
@@ -76,6 +72,21 @@ final readonly class CheckoutHandler
         if ($entry->mode === \Lukasojd\PureGit\Domain\Object\FileMode::Executable) {
             chmod($fullPath, 0o755);
         }
+    }
+
+    private function checkoutBranch(RefName $branchRef): CheckoutResult
+    {
+        $currentBranch = $this->repository->refs->getSymbolicRef(RefName::head());
+
+        if ($currentBranch instanceof RefName && $currentBranch->equals($branchRef)) {
+            return CheckoutResult::AlreadyOnBranch;
+        }
+
+        $commitId = $this->repository->refs->resolve($branchRef);
+        $this->updateWorkingTree($commitId);
+        $this->repository->refs->updateSymbolicRef(RefName::head(), $branchRef);
+
+        return CheckoutResult::SwitchedToBranch;
     }
 
     private function updateWorkingTree(ObjectId $commitId): void
