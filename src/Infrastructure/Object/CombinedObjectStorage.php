@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Lukasojd\PureGit\Infrastructure\Object;
 
 use Lukasojd\PureGit\Domain\Exception\ObjectNotFoundException;
+use Lukasojd\PureGit\Domain\Exception\PureGitException;
 use Lukasojd\PureGit\Domain\Object\GitObject;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Repository\ObjectStorageInterface;
@@ -100,10 +101,59 @@ final class CombinedObjectStorage implements ObjectStorageInterface
         return $this->looseStorage->readRawHeaderByBinary($binHash);
     }
 
+    public function findByPrefix(string $hexPrefix): ?ObjectId
+    {
+        $matches = $this->findLooseByPrefix($hexPrefix);
+
+        $this->ensurePacksLoaded();
+        foreach ($this->packReaders as $reader) {
+            $matches = array_merge($matches, $reader->findByPrefix($hexPrefix));
+            if (count($matches) > 1) {
+                throw new PureGitException(sprintf('short object ID %s is ambiguous', $hexPrefix));
+            }
+        }
+
+        if ($matches === []) {
+            return null;
+        }
+
+        return ObjectId::fromHex($matches[0]);
+    }
+
     public function refreshPacks(): void
     {
         $this->packReaders = [];
         $this->packsLoaded = false;
+    }
+
+    /**
+     * @return list<string> hex hashes
+     */
+    private function findLooseByPrefix(string $hexPrefix): array
+    {
+        if (strlen($hexPrefix) < 2) {
+            return [];
+        }
+
+        $dir = $this->objectsDir . '/' . substr($hexPrefix, 0, 2);
+        if (! is_dir($dir)) {
+            return [];
+        }
+
+        $suffix = substr($hexPrefix, 2);
+        $matches = [];
+        $files = scandir($dir);
+        if ($files === false) {
+            return [];
+        }
+
+        foreach ($files as $file) {
+            if ($file !== '.' && $file !== '..' && str_starts_with($file, $suffix)) {
+                $matches[] = substr($hexPrefix, 0, 2) . $file;
+            }
+        }
+
+        return $matches;
     }
 
     private function ensurePacksLoaded(): void

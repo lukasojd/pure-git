@@ -10,6 +10,7 @@ use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Infrastructure\Config\GitConfigReader;
 use Lukasojd\PureGit\Infrastructure\Object\CombinedObjectStorage;
+use Lukasojd\PureGit\Infrastructure\Transport\StreamingPackReceiver;
 use Lukasojd\PureGit\Infrastructure\Transport\TransportFactory;
 use Lukasojd\PureGit\Infrastructure\Transport\TransportInterface;
 
@@ -141,6 +142,11 @@ final readonly class FetchHandler
         $finalPackPath = $packDir . '/pack-' . $packChecksum . '.pack';
         $finalIdxPath = $packDir . '/pack-' . $packChecksum . '.idx';
 
+        $tempIdxPath = substr($packPath, 0, -5) . '.idx';
+        if (! file_exists($tempIdxPath)) {
+            $this->reindexPack($packPath);
+        }
+
         rename($packPath, $finalPackPath);
 
         $tempIdxPath = substr($packPath, 0, -5) . '.idx';
@@ -235,6 +241,18 @@ final readonly class FetchHandler
         }
 
         return $dstPrefix . substr($refName, strlen($srcPrefix));
+    }
+
+    private function reindexPack(string $packPath): void
+    {
+        $data = file_get_contents($packPath);
+        if ($data === false) {
+            return;
+        }
+
+        $receiver = new StreamingPackReceiver($packPath);
+        $receiver->feedPackData($data);
+        $receiver->finish();
     }
 
     private function readPackChecksum(string $packPath): ?string

@@ -45,6 +45,16 @@ final class PackfileReader
     }
 
     /**
+     * Find all object hashes matching the given hex prefix.
+     *
+     * @return list<string> hex hashes
+     */
+    public function findByPrefix(string $hexPrefix): array
+    {
+        return $this->indexReader->findByPrefix($hexPrefix);
+    }
+
+    /**
      * Get delta reuse info for an object, if it is stored as OFS_DELTA.
      *
      * Returns the base object ID and uncompressed delta data, allowing

@@ -14,13 +14,7 @@ use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\Tree;
 use Lukasojd\PureGit\Domain\Object\TreeEntry;
 use Lukasojd\PureGit\Domain\Ref\RefName;
-
-enum ResetMode: string
-{
-    case Soft = 'soft';
-    case Mixed = 'mixed';
-    case Hard = 'hard';
-}
+use Lukasojd\PureGit\Infrastructure\Object\CombinedObjectStorage;
 
 final readonly class ResetHandler
 {
@@ -64,44 +58,83 @@ final readonly class ResetHandler
 
     private function resolveTarget(string $target): ObjectId
     {
-        // Try as commit hash
-        try {
-            return ObjectId::fromHex($target);
-        } catch (\Throwable) {
-            // Not a hash
-        }
+        [$base, $steps] = $this->splitRevisionSuffix($target);
+        $baseId = $this->resolveBase($base);
 
-        if (str_starts_with($target, 'HEAD')) {
-            return $this->resolveHeadRelative($target);
-        }
-
-        return $this->repository->refs->resolve(RefName::fromString($target));
+        return $this->walkBackCommits($baseId, $steps);
     }
 
-    private function resolveHeadRelative(string $target): ObjectId
+    /**
+     * @return array{string, int}
+     */
+    private function splitRevisionSuffix(string $target): array
     {
-        $steps = $this->parseHeadSteps(substr($target, 4));
-        $commitId = $this->repository->refs->resolve(RefName::head());
+        if (preg_match('/^(.+?)~(\d*)$/', $target, $m) === 1) {
+            return [$m[1], $m[2] === '' ? 1 : (int) $m[2]];
+        }
 
-        return $this->walkBackCommits($commitId, $steps);
+        if (preg_match('/^(.+?)(\^+)$/', $target, $m) === 1) {
+            return [$m[1], strlen($m[2])];
+        }
+
+        return [$target, 0];
     }
 
-    private function parseHeadSteps(string $suffix): int
+    private function resolveBase(string $base): ObjectId
     {
-        if ($suffix === '') {
-            return 0;
+        if ($base === 'HEAD') {
+            return $this->repository->refs->resolve(RefName::head());
         }
 
-        if (! str_starts_with($suffix, '~')) {
-            return 0;
+        if (preg_match('/^[0-9a-f]{40}$/', $base) === 1) {
+            return ObjectId::fromHex($base);
         }
 
-        $numericPart = substr($suffix, 1);
-        if ($numericPart === '') {
-            return 1;
+        $refMatch = $this->tryResolveRef($base);
+        if ($refMatch instanceof ObjectId) {
+            return $refMatch;
         }
 
-        return (int) $numericPart;
+        return $this->resolveShortHash($base);
+    }
+
+    private function tryResolveRef(string $name): ?ObjectId
+    {
+        $candidates = [
+            $name,
+            'refs/' . $name,
+            'refs/heads/' . $name,
+            'refs/tags/' . $name,
+            'refs/remotes/' . $name,
+        ];
+
+        foreach ($candidates as $candidate) {
+            try {
+                return $this->repository->refs->resolve(RefName::fromString($candidate));
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveShortHash(string $prefix): ObjectId
+    {
+        if (preg_match('/^[0-9a-f]{4,39}$/', $prefix) !== 1) {
+            throw new PureGitException(sprintf("fatal: ambiguous argument '%s': unknown revision", $prefix));
+        }
+
+        if (! ($this->repository->objects instanceof CombinedObjectStorage)) {
+            throw new PureGitException(sprintf("fatal: bad revision '%s'", $prefix));
+        }
+
+        $match = $this->repository->objects->findByPrefix($prefix);
+        if (! $match instanceof ObjectId) {
+            throw new PureGitException(sprintf("fatal: bad revision '%s'", $prefix));
+        }
+
+        return $match;
     }
 
     private function walkBackCommits(ObjectId $commitId, int $steps): ObjectId

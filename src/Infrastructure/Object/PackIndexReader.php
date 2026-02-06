@@ -177,6 +177,35 @@ final class PackIndexReader
         return $hash !== null ? ObjectId::fromHex($hash) : null;
     }
 
+    /**
+     * Find all object hashes matching the given hex prefix.
+     *
+     * @return list<string> hex hashes
+     */
+    public function findByPrefix(string $hexPrefix): array
+    {
+        $this->ensureInitialized();
+        $this->ensureTables();
+
+        if ($this->hashTable === null || $this->hashTable === '') {
+            return [];
+        }
+
+        $firstByte = intval(substr($hexPrefix, 0, 2), 16);
+        $lo = $firstByte === 0 ? 0 : $this->fanout[$firstByte];
+        $hi = $this->fanout[$firstByte + 1] - 1;
+
+        $matches = [];
+        for ($i = $lo; $i <= $hi; $i++) {
+            $hashHex = bin2hex(substr($this->hashTable, $i * self::HASH_SIZE, self::HASH_SIZE));
+            if (str_starts_with($hashHex, $hexPrefix)) {
+                $matches[] = $hashHex;
+            }
+        }
+
+        return $matches;
+    }
+
     private function ensureOffsetMap(): void
     {
         if ($this->offsetToHash !== null) {
