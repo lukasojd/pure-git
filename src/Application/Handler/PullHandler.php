@@ -24,7 +24,10 @@ final readonly class PullHandler
         $fetchHandler = new FetchHandler($this->repository);
         $fetchResult = $fetchHandler->fetch($remoteName);
 
-        if ($fetchResult->upToDate) {
+        $theirsId = $this->repository->refs->resolve(RefName::fromString($trackingRef));
+        $headId = $this->repository->refs->resolve(RefName::head());
+
+        if ($headId->equals($theirsId)) {
             return new PullResult(
                 fetchResult: $fetchResult,
                 mergeCommitId: null,
@@ -33,8 +36,6 @@ final readonly class PullHandler
                 rebase: false,
             );
         }
-
-        $theirsId = $this->repository->refs->resolve(RefName::fromString($trackingRef));
 
         if ($rebase) {
             return $this->pullRebase($fetchResult, $theirsId);
@@ -60,17 +61,6 @@ final readonly class PullHandler
     private function pullMerge(FetchResult $fetchResult, string $trackingRef, ObjectId $theirsId): PullResult
     {
         $headId = $this->repository->refs->resolve(RefName::head());
-
-        if ($headId->equals($theirsId)) {
-            return new PullResult(
-                fetchResult: $fetchResult,
-                mergeCommitId: null,
-                upToDate: true,
-                fastForward: false,
-                rebase: false,
-            );
-        }
-
         $resolver = new MergeBaseResolver($this->repository->objects);
         $baseId = $resolver->findMergeBase($headId, $theirsId);
         $isFastForward = $baseId instanceof ObjectId && $baseId->equals($headId);
