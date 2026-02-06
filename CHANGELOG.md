@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- SSH transport (phpseclib) for clone, fetch, push
+- HTTP/HTTPS smart transport (ext-curl) for clone, fetch, push
+- git:// transport (TCP sockets) for clone, fetch (read-only)
+- Fetch command (`puregit fetch`)
+- Pull command with merge and rebase modes (`puregit pull [--rebase]`)
+- Push command (`puregit push`)
+- Rebase handler (cherry-pick chain for `pull --rebase`)
+- Git-style diffstat output for pull (file listing with colored +/- bar graph)
+- Commit-graph binary format (280x speedup for commit counting)
+- Delta encoding with sliding window packfile writer
+- Streaming pack receiver with side-band-64k demuxing
+- Reset: support short hashes (`abc1234`), branch names (`main`), any-ref relative syntax (`feature~3`, `main^^`)
+- Object prefix search (`findByPrefix`) for abbreviated hash resolution
+- Pack index generation when transport doesn't produce .idx (LocalTransport)
+- Docker-based acceptance tests (SSH + HTTP full cycle)
+- GitHub Actions CI for acceptance tests
+- Unit tests for pull, reset, diff, diffstat formatter (186 tests, 578 assertions)
+
+### Fixed
+- Pull correctly fast-forwards when tracking ref is ahead after previous fetch
+- ResetMode enum extracted to own file (PSR-4 autoloader fix)
+- Reset command shows actual commit hash and message after reset
+
 ## [0.1.0] - 2026-02-06
 
 ### Added

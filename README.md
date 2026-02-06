@@ -52,8 +52,12 @@ bin/puregit tag -d <name>           # delete tag
 # Merge
 bin/puregit merge <branch>
 
-# Reset
+# Reset (supports HEAD~N, HEAD^^^, branch names, short hashes)
 bin/puregit reset [--soft|--mixed|--hard] <commit>
+bin/puregit reset --hard HEAD~3
+bin/puregit reset --hard main^^
+bin/puregit reset --hard abc1234
+bin/puregit reset --hard feature~2
 
 # Show object
 bin/puregit show [<object>]
