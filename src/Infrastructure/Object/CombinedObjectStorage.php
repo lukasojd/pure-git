@@ -30,7 +30,7 @@ final class CombinedObjectStorage implements ObjectStorageInterface
     public function read(ObjectId $id): GitObject
     {
         $cached = $this->cache->get($id);
-        if ($cached instanceof \Lukasojd\PureGit\Domain\Object\GitObject) {
+        if ($cached instanceof GitObject) {
             return $cached;
         }
 
@@ -85,25 +85,42 @@ final class CombinedObjectStorage implements ObjectStorageInterface
             return;
         }
 
-        $packDir = $this->objectsDir . '/pack';
-        if (is_dir($packDir)) {
-            $files = scandir($packDir);
-            if ($files !== false) {
-                foreach ($files as $file) {
-                    if (str_ends_with($file, '.idx')) {
-                        $baseName = substr($file, 0, -4);
-                        $packPath = $packDir . '/' . $baseName . '.pack';
-                        $idxPath = $packDir . '/' . $file;
+        $this->loadPackFiles();
+        $this->packsLoaded = true;
+    }
 
-                        if (file_exists($packPath)) {
-                            $indexReader = new PackIndexReader($idxPath);
-                            $this->packReaders[] = new PackfileReader($packPath, $indexReader);
-                        }
-                    }
-                }
-            }
+    private function loadPackFiles(): void
+    {
+        $packDir = $this->objectsDir . '/pack';
+        if (! is_dir($packDir)) {
+            return;
         }
 
-        $this->packsLoaded = true;
+        $files = scandir($packDir);
+        if ($files === false) {
+            return;
+        }
+
+        foreach ($files as $file) {
+            $this->loadPackFileIfValid($packDir, $file);
+        }
+    }
+
+    private function loadPackFileIfValid(string $packDir, string $file): void
+    {
+        if (! str_ends_with($file, '.idx')) {
+            return;
+        }
+
+        $baseName = substr($file, 0, -4);
+        $packPath = $packDir . '/' . $baseName . '.pack';
+        $idxPath = $packDir . '/' . $file;
+
+        if (! file_exists($packPath)) {
+            return;
+        }
+
+        $indexReader = new PackIndexReader($idxPath);
+        $this->packReaders[] = new PackfileReader($packPath, $indexReader);
     }
 }

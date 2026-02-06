@@ -42,6 +42,20 @@ final class StatusCommand implements CliCommand
         $handler = new StatusHandler($repo);
         $result = $handler->handle();
 
+        $this->printBranchHeader($repo);
+        $this->printStagedChanges($result['staged']);
+        $this->printUnstagedChanges($result['unstaged']);
+        $this->printUntrackedFiles($result['untracked']);
+
+        if ($result['staged'] === [] && $result['unstaged'] === [] && $result['untracked'] === []) {
+            fwrite(STDOUT, "nothing to commit, working tree clean\n");
+        }
+
+        return 0;
+    }
+
+    private function printBranchHeader(Repository $repo): void
+    {
         $branchHandler = new BranchHandler($repo);
         $currentBranch = $branchHandler->getCurrentBranch();
 
@@ -50,43 +64,61 @@ final class StatusCommand implements CliCommand
         } else {
             fwrite(STDOUT, "HEAD detached\n");
         }
+    }
 
-        if ($result['staged'] !== []) {
-            fwrite(STDOUT, "\nChanges to be committed:\n");
-            foreach ($result['staged'] as $path => $status) {
-                $label = match ($status) {
-                    FileStatus::Added => 'new file',
-                    FileStatus::Modified => 'modified',
-                    FileStatus::Deleted => 'deleted',
-                    default => $status->value,
-                };
-                fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
-            }
+    /**
+     * @param array<string, FileStatus> $staged
+     */
+    private function printStagedChanges(array $staged): void
+    {
+        if ($staged === []) {
+            return;
         }
 
-        if ($result['unstaged'] !== []) {
-            fwrite(STDOUT, "\nChanges not staged for commit:\n");
-            foreach ($result['unstaged'] as $path => $status) {
-                $label = match ($status) {
-                    FileStatus::Modified => 'modified',
-                    FileStatus::Deleted => 'deleted',
-                    default => $status->value,
-                };
-                fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
-            }
+        fwrite(STDOUT, "\nChanges to be committed:\n");
+        foreach ($staged as $path => $status) {
+            $label = match ($status) {
+                FileStatus::Added => 'new file',
+                FileStatus::Modified => 'modified',
+                FileStatus::Deleted => 'deleted',
+                default => $status->value,
+            };
+            fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
+        }
+    }
+
+    /**
+     * @param array<string, FileStatus> $unstaged
+     */
+    private function printUnstagedChanges(array $unstaged): void
+    {
+        if ($unstaged === []) {
+            return;
         }
 
-        if ($result['untracked'] !== []) {
-            fwrite(STDOUT, "\nUntracked files:\n");
-            foreach ($result['untracked'] as $path) {
-                fwrite(STDOUT, sprintf("  %s\n", $path));
-            }
+        fwrite(STDOUT, "\nChanges not staged for commit:\n");
+        foreach ($unstaged as $path => $status) {
+            $label = match ($status) {
+                FileStatus::Modified => 'modified',
+                FileStatus::Deleted => 'deleted',
+                default => $status->value,
+            };
+            fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
+        }
+    }
+
+    /**
+     * @param list<string> $untracked
+     */
+    private function printUntrackedFiles(array $untracked): void
+    {
+        if ($untracked === []) {
+            return;
         }
 
-        if ($result['staged'] === [] && $result['unstaged'] === [] && $result['untracked'] === []) {
-            fwrite(STDOUT, "nothing to commit, working tree clean\n");
+        fwrite(STDOUT, "\nUntracked files:\n");
+        foreach ($untracked as $path) {
+            fwrite(STDOUT, sprintf("  %s\n", $path));
         }
-
-        return 0;
     }
 }

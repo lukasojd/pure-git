@@ -30,20 +30,7 @@ final class ResetCommand implements CliCommand
      */
     public function execute(array $args): int
     {
-        $mode = ResetMode::Mixed;
-        $target = 'HEAD';
-
-        foreach ($args as $arg) {
-            if ($arg === '--soft') {
-                $mode = ResetMode::Soft;
-            } elseif ($arg === '--mixed') {
-                $mode = ResetMode::Mixed;
-            } elseif ($arg === '--hard') {
-                $mode = ResetMode::Hard;
-            } elseif ($arg[0] !== '-') {
-                $target = $arg;
-            }
-        }
+        [$mode, $target] = $this->parseArgs($args);
 
         $cwd = getcwd();
         if ($cwd === false) {
@@ -59,5 +46,36 @@ final class ResetCommand implements CliCommand
         fwrite(STDOUT, sprintf("HEAD is now at %s\n", $target));
 
         return 0;
+    }
+
+    /**
+     * @param list<string> $args
+     * @return array{ResetMode, string}
+     */
+    private function parseArgs(array $args): array
+    {
+        $mode = ResetMode::Mixed;
+        $target = 'HEAD';
+
+        foreach ($args as $arg) {
+            $parsedMode = $this->parseModeFlag($arg);
+            if ($parsedMode instanceof ResetMode) {
+                $mode = $parsedMode;
+            } elseif ($arg[0] !== '-') {
+                $target = $arg;
+            }
+        }
+
+        return [$mode, $target];
+    }
+
+    private function parseModeFlag(string $arg): ?ResetMode
+    {
+        return match ($arg) {
+            '--soft' => ResetMode::Soft,
+            '--mixed' => ResetMode::Mixed,
+            '--hard' => ResetMode::Hard,
+            default => null,
+        };
     }
 }

@@ -97,7 +97,23 @@ final class MyersDiffAlgorithm implements DiffAlgorithm
      */
     private function buildHunks(array $editScript): array
     {
-        // Find ranges of changes
+        $changeRanges = $this->findChangeRanges($editScript);
+
+        if ($changeRanges === []) {
+            return [];
+        }
+
+        $mergedRanges = $this->mergeRanges($changeRanges);
+
+        return $this->buildHunksFromRanges($editScript, $mergedRanges);
+    }
+
+    /**
+     * @param list<array{type: DiffLineType, oldLine: ?int, newLine: ?int, content: string}> $editScript
+     * @return list<array{int, int}>
+     */
+    private function findChangeRanges(array $editScript): array
+    {
         $changeRanges = [];
         $inChange = false;
         $changeStart = -1;
@@ -118,59 +134,77 @@ final class MyersDiffAlgorithm implements DiffAlgorithm
             $changeRanges[] = [$changeStart, count($editScript) - 1];
         }
 
-        if ($changeRanges === []) {
-            return [];
-        }
+        return $changeRanges;
+    }
 
-        // Merge nearby ranges and build hunks with context
+    /**
+     * @param list<array{type: DiffLineType, oldLine: ?int, newLine: ?int, content: string}> $editScript
+     * @param list<array{int, int}> $mergedRanges
+     * @return list<DiffHunk>
+     */
+    private function buildHunksFromRanges(array $editScript, array $mergedRanges): array
+    {
         $hunks = [];
-        $mergedRanges = $this->mergeRanges($changeRanges);
 
         foreach ($mergedRanges as [$start, $end]) {
-            $contextStart = max(0, $start - self::CONTEXT_LINES);
-            $contextEnd = min(count($editScript) - 1, $end + self::CONTEXT_LINES);
-
-            $lines = [];
-            $oldStart = null;
-            $newStart = null;
-            $oldCount = 0;
-            $newCount = 0;
-
-            for ($k = $contextStart; $k <= $contextEnd; $k++) {
-                $edit = $editScript[$k];
-                $line = new DiffLine($edit['type'], $edit['content'], $edit['oldLine'], $edit['newLine']);
-                $lines[] = $line;
-
-                match ($edit['type']) {
-                    DiffLineType::Context => (function () use (&$oldCount, &$newCount, $edit, &$oldStart, &$newStart): void {
-                        $oldCount++;
-                        $newCount++;
-                        $oldStart ??= $edit['oldLine'];
-                        $newStart ??= $edit['newLine'];
-                    })(),
-                    DiffLineType::Added => (function () use (&$newCount, $edit, &$oldStart, &$newStart): void {
-                        $newCount++;
-                        $newStart ??= $edit['newLine'];
-                        $oldStart ??= ($edit['oldLine'] ?? 1);
-                    })(),
-                    DiffLineType::Removed => (function () use (&$oldCount, $edit, &$oldStart, &$newStart): void {
-                        $oldCount++;
-                        $oldStart ??= $edit['oldLine'];
-                        $newStart ??= ($edit['newLine'] ?? 1);
-                    })(),
-                };
-            }
-
-            $hunks[] = new DiffHunk(
-                oldStart: $oldStart ?? 1,
-                oldCount: $oldCount,
-                newStart: $newStart ?? 1,
-                newCount: $newCount,
-                lines: $lines,
-            );
+            $hunks[] = $this->buildSingleHunk($editScript, $start, $end);
         }
 
         return $hunks;
+    }
+
+    /**
+     * @param list<array{type: DiffLineType, oldLine: ?int, newLine: ?int, content: string}> $editScript
+     */
+    private function buildSingleHunk(array $editScript, int $start, int $end): DiffHunk
+    {
+        $contextStart = max(0, $start - self::CONTEXT_LINES);
+        $contextEnd = min(count($editScript) - 1, $end + self::CONTEXT_LINES);
+
+        $lines = [];
+        $oldStart = null;
+        $newStart = null;
+        $oldCount = 0;
+        $newCount = 0;
+
+        for ($k = $contextStart; $k <= $contextEnd; $k++) {
+            $edit = $editScript[$k];
+            $lines[] = new DiffLine($edit['type'], $edit['content'], $edit['oldLine'], $edit['newLine']);
+            $this->updateHunkCounts($edit, $oldStart, $newStart, $oldCount, $newCount);
+        }
+
+        return new DiffHunk(
+            oldStart: $oldStart ?? 1,
+            oldCount: $oldCount,
+            newStart: $newStart ?? 1,
+            newCount: $newCount,
+            lines: $lines,
+        );
+    }
+
+    /**
+     * @param array{type: DiffLineType, oldLine: ?int, newLine: ?int, content: string} $edit
+     */
+    private function updateHunkCounts(array $edit, ?int &$oldStart, ?int &$newStart, int &$oldCount, int &$newCount): void
+    {
+        match ($edit['type']) {
+            DiffLineType::Context => (function () use (&$oldCount, &$newCount, $edit, &$oldStart, &$newStart): void {
+                $oldCount++;
+                $newCount++;
+                $oldStart ??= $edit['oldLine'];
+                $newStart ??= $edit['newLine'];
+            })(),
+            DiffLineType::Added => (function () use (&$newCount, $edit, &$oldStart, &$newStart): void {
+                $newCount++;
+                $newStart ??= $edit['newLine'];
+                $oldStart ??= ($edit['oldLine'] ?? 1);
+            })(),
+            DiffLineType::Removed => (function () use (&$oldCount, $edit, &$oldStart, &$newStart): void {
+                $oldCount++;
+                $oldStart ??= $edit['oldLine'];
+                $newStart ??= ($edit['newLine'] ?? 1);
+            })(),
+        };
     }
 
     /**

@@ -45,24 +45,41 @@ final class AddCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new AddHandler($repo);
+        $paths = $this->resolvePaths($args, $repo);
+        $handler->handle($paths);
 
+        return 0;
+    }
+
+    /**
+     * @param list<string> $args
+     * @return list<string>
+     */
+    private function resolvePaths(array $args, Repository $repo): array
+    {
         $paths = [];
+
         foreach ($args as $arg) {
             if ($arg === '.') {
-                // Add all files
-                $files = $repo->filesystem->listFilesRecursive($repo->workDir);
-                foreach ($files as $file) {
-                    if (! str_starts_with($file, '.git/') && $file !== '.git') {
-                        $paths[] = $file;
-                    }
-                }
+                $paths = [...$paths, ...$this->collectAllWorkingTreeFiles($repo)];
             } else {
                 $paths[] = PathUtils::relativeTo($arg, $repo->workDir);
             }
         }
 
-        $handler->handle($paths);
+        return $paths;
+    }
 
-        return 0;
+    /**
+     * @return list<string>
+     */
+    private function collectAllWorkingTreeFiles(Repository $repo): array
+    {
+        $files = $repo->filesystem->listFilesRecursive($repo->workDir);
+
+        return array_values(array_filter(
+            $files,
+            static fn (string $file): bool => ! str_starts_with($file, '.git/') && $file !== '.git',
+        ));
     }
 }

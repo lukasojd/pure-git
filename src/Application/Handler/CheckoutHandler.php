@@ -12,6 +12,7 @@ use Lukasojd\PureGit\Domain\Object\Blob;
 use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\Tree;
+use Lukasojd\PureGit\Domain\Object\TreeEntry;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 
 final readonly class CheckoutHandler
@@ -64,11 +65,7 @@ final readonly class CheckoutHandler
         }
 
         $fullPath = $this->repository->workDir . '/' . $path;
-        $dir = dirname($fullPath);
-        if (! is_dir($dir)) {
-            mkdir($dir, 0o777, true);
-        }
-
+        $this->ensureParentDirectory($fullPath);
         $this->repository->filesystem->write($fullPath, $content);
     }
 
@@ -110,64 +107,76 @@ final readonly class CheckoutHandler
 
         foreach ($tree->entries as $entry) {
             $path = $prefix === '' ? $entry->name : $prefix . '/' . $entry->name;
-
-            if ($entry->isTree()) {
-                $fullDir = $this->repository->workDir . '/' . $path;
-                $this->repository->filesystem->mkdir($fullDir);
-                $this->writeTree($entry->objectId, $path, $index);
-            } else {
-                $blob = $this->repository->objects->read($entry->objectId);
-                if ($blob instanceof Blob) {
-                    $fullPath = $this->repository->workDir . '/' . $path;
-                    $dir = dirname($fullPath);
-                    if (! is_dir($dir)) {
-                        mkdir($dir, 0o777, true);
-                    }
-                    $this->repository->filesystem->write($fullPath, $blob->content);
-
-                    $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, strlen($blob->content));
-                    $index->addEntry($indexEntry);
-                }
-            }
+            $this->writeTreeEntry($entry, $path, $index);
         }
+    }
+
+    private function writeTreeEntry(TreeEntry $entry, string $path, Index $index): void
+    {
+        if ($entry->isTree()) {
+            $fullDir = $this->repository->workDir . '/' . $path;
+            $this->repository->filesystem->mkdir($fullDir);
+            $this->writeTree($entry->objectId, $path, $index);
+            return;
+        }
+
+        $blob = $this->repository->objects->read($entry->objectId);
+        if (! $blob instanceof Blob) {
+            return;
+        }
+
+        $fullPath = $this->repository->workDir . '/' . $path;
+        $this->ensureParentDirectory($fullPath);
+        $this->repository->filesystem->write($fullPath, $blob->content);
+
+        $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, strlen($blob->content));
+        $index->addEntry($indexEntry);
     }
 
     private function findFileInTree(ObjectId $treeId, string $path): ?string
     {
         $parts = explode('/', $path);
-        $tree = $this->repository->objects->read($treeId);
 
+        return $this->traverseTreePath($treeId, $parts, 0);
+    }
+
+    /**
+     * @param list<string> $parts
+     */
+    private function traverseTreePath(ObjectId $treeId, array $parts, int $depth): ?string
+    {
+        $tree = $this->repository->objects->read($treeId);
         if (! $tree instanceof Tree) {
             return null;
         }
 
-        $current = $tree;
-        $counter = count($parts);
+        $entry = $tree->findEntry($parts[$depth]);
+        if (! $entry instanceof TreeEntry) {
+            return null;
+        }
 
-        for ($i = 0; $i < $counter; $i++) {
-            $entry = $current->findEntry($parts[$i]);
-            if (! $entry instanceof \Lukasojd\PureGit\Domain\Object\TreeEntry) {
-                return null;
-            }
+        if ($depth === count($parts) - 1) {
+            return $this->readBlobContent($entry->objectId);
+        }
 
-            if ($i === count($parts) - 1) {
-                // Last part — should be a file
-                $blob = $this->repository->objects->read($entry->objectId);
-                if ($blob instanceof Blob) {
-                    return $blob->content;
-                }
+        return $this->traverseTreePath($entry->objectId, $parts, $depth + 1);
+    }
 
-                return null;
-            }
-
-            // Not the last part — should be a tree
-            $subtree = $this->repository->objects->read($entry->objectId);
-            if (! $subtree instanceof Tree) {
-                return null;
-            }
-            $current = $subtree;
+    private function readBlobContent(ObjectId $objectId): ?string
+    {
+        $blob = $this->repository->objects->read($objectId);
+        if ($blob instanceof Blob) {
+            return $blob->content;
         }
 
         return null;
+    }
+
+    private function ensureParentDirectory(string $fullPath): void
+    {
+        $dir = dirname($fullPath);
+        if (! is_dir($dir)) {
+            mkdir($dir, 0o777, true);
+        }
     }
 }

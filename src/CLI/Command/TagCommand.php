@@ -39,15 +39,37 @@ final class TagCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new TagHandler($repo);
 
-        // Delete
-        if (isset($args[0]) && $args[0] === '-d' && isset($args[1])) {
-            $handler->delete($args[1]);
-            fwrite(STDOUT, sprintf("Deleted tag '%s'\n", $args[1]));
-
-            return 0;
+        if ($this->isDeleteRequest($args)) {
+            return $this->deleteTag($handler, $args[1]);
         }
 
-        // Annotated tag
+        $parsed = $this->parseTagArgs($args);
+
+        if ($parsed['name'] !== null && $parsed['annotated'] && $parsed['message'] !== null) {
+            return $this->createAnnotatedTag($handler, $parsed['name'], $parsed['message']);
+        }
+
+        if ($parsed['name'] !== null) {
+            return $this->createLightweightTag($handler, $parsed['name']);
+        }
+
+        return $this->listTags($handler);
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function isDeleteRequest(array $args): bool
+    {
+        return isset($args[0]) && $args[0] === '-d' && isset($args[1]);
+    }
+
+    /**
+     * @param list<string> $args
+     * @return array{annotated: bool, name: ?string, message: ?string}
+     */
+    private function parseTagArgs(array $args): array
+    {
         $annotated = false;
         $name = null;
         $message = null;
@@ -66,21 +88,39 @@ final class TagCommand implements CliCommand
             }
         }
 
-        if ($name !== null && $annotated && $message !== null) {
-            $handler->createAnnotated($name, $message);
-            fwrite(STDOUT, sprintf("Created annotated tag '%s'\n", $name));
+        return [
+            'annotated' => $annotated,
+            'name' => $name,
+            'message' => $message,
+        ];
+    }
 
-            return 0;
-        }
+    private function deleteTag(TagHandler $handler, string $name): int
+    {
+        $handler->delete($name);
+        fwrite(STDOUT, sprintf("Deleted tag '%s'\n", $name));
 
-        if ($name !== null) {
-            $handler->createLightweight($name);
-            fwrite(STDOUT, sprintf("Created tag '%s'\n", $name));
+        return 0;
+    }
 
-            return 0;
-        }
+    private function createAnnotatedTag(TagHandler $handler, string $name, string $message): int
+    {
+        $handler->createAnnotated($name, $message);
+        fwrite(STDOUT, sprintf("Created annotated tag '%s'\n", $name));
 
-        // List
+        return 0;
+    }
+
+    private function createLightweightTag(TagHandler $handler, string $name): int
+    {
+        $handler->createLightweight($name);
+        fwrite(STDOUT, sprintf("Created tag '%s'\n", $name));
+
+        return 0;
+    }
+
+    private function listTags(TagHandler $handler): int
+    {
         $tags = $handler->list();
         foreach (array_keys($tags) as $refName) {
             $short = str_replace('refs/tags/', '', $refName);

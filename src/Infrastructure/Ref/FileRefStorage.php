@@ -47,7 +47,7 @@ final readonly class FileRefStorage implements RefStorageInterface
         }
 
         // Check packed-refs
-        return $this->findInPackedRefs($ref) instanceof \Lukasojd\PureGit\Domain\Object\ObjectId;
+        return $this->findInPackedRefs($ref) instanceof ObjectId;
     }
 
     /**
@@ -119,7 +119,7 @@ final readonly class FileRefStorage implements RefStorageInterface
 
         // Check packed-refs
         $packedId = $this->findInPackedRefs($ref);
-        if ($packedId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId) {
+        if ($packedId instanceof ObjectId) {
             return $packedId;
         }
 
@@ -201,13 +201,26 @@ final readonly class FileRefStorage implements RefStorageInterface
 
             if (is_dir($fullPath)) {
                 $this->collectLooseRefs($fullPath, $refPath . '/', $refs);
-            } elseif (is_file($fullPath)) {
-                $raw = file_get_contents($fullPath);
-                $content = trim($raw !== false ? $raw : '');
-                if ($content !== '' && ! str_starts_with($content, 'ref: ') && preg_match('/^[0-9a-f]{40}$/', $content) === 1) {
-                    $refs[$refPath] = ObjectId::fromHex($content);
-                }
+                continue;
             }
+
+            $this->tryAddLooseRef($fullPath, $refPath, $refs);
+        }
+    }
+
+    /**
+     * @param array<string, ObjectId> $refs
+     */
+    private function tryAddLooseRef(string $fullPath, string $refPath, array &$refs): void
+    {
+        if (! is_file($fullPath)) {
+            return;
+        }
+
+        $raw = file_get_contents($fullPath);
+        $content = trim($raw !== false ? $raw : '');
+        if ($content !== '' && ! str_starts_with($content, 'ref: ') && preg_match('/^[0-9a-f]{40}$/', $content) === 1) {
+            $refs[$refPath] = ObjectId::fromHex($content);
         }
     }
 

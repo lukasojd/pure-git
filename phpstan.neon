@@ -1,8 +1,12 @@
 includes:
     - vendor/phpstan/phpstan-strict-rules/rules.neon
+    - vendor/tomasvotruba/cognitive-complexity/config/extension.neon
 
 parameters:
     level: max
     paths:
         - src
     tmpDir: .phpunit.cache/phpstan
+    cognitive_complexity:
+        class: 50
+        function: 8

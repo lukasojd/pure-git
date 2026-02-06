@@ -133,24 +133,40 @@ final readonly class CommitHandler
 
     private function getConfigValue(string $key, string $default): string
     {
+        $content = $this->readConfigFile();
+        if ($content === null) {
+            return $default;
+        }
+
+        return $this->findConfigProperty($content, $key, $default);
+    }
+
+    private function readConfigFile(): ?string
+    {
         $configPath = $this->repository->gitDir . '/config';
         if (! file_exists($configPath)) {
-            return $default;
+            return null;
         }
 
         $content = file_get_contents($configPath);
-        if ($content === false) {
-            return $default;
-        }
 
-        // Simple INI-like parsing for user.name / user.email
+        return $content !== false ? $content : null;
+    }
+
+    private function findConfigProperty(string $content, string $key, string $default): string
+    {
         $parts = explode('.', $key, 2);
         if (count($parts) !== 2) {
             return $default;
         }
 
-        $section = $parts[0];
-        $property = $parts[1];
+        [$section, $property] = $parts;
+
+        return $this->searchSectionForProperty($content, $section, $property, $default);
+    }
+
+    private function searchSectionForProperty(string $content, string $section, string $property, string $default): string
+    {
         $inSection = false;
 
         foreach (explode("\n", $content) as $line) {
@@ -160,11 +176,13 @@ final readonly class CommitHandler
                 continue;
             }
 
-            if ($inSection && str_contains($line, '=')) {
-                [$k, $v] = explode('=', $line, 2);
-                if (trim($k) === $property) {
-                    return trim($v);
-                }
+            if (! $inSection || ! str_contains($line, '=')) {
+                continue;
+            }
+
+            [$k, $v] = explode('=', $line, 2);
+            if (trim($k) === $property) {
+                return trim($v);
             }
         }
 

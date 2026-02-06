@@ -39,23 +39,51 @@ final class BranchCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new BranchHandler($repo);
 
-        // Delete
-        if (isset($args[0]) && $args[0] === '-d' && isset($args[1])) {
-            $handler->delete($args[1]);
-            fwrite(STDOUT, sprintf("Deleted branch %s\n", $args[1]));
-
-            return 0;
+        if ($this->isDeleteRequest($args)) {
+            return $this->deleteBranch($handler, $args[1]);
         }
 
-        // Create
-        if (isset($args[0]) && $args[0] !== '' && $args[0][0] !== '-') {
-            $handler->create($args[0]);
-            fwrite(STDOUT, sprintf("Created branch %s\n", $args[0]));
-
-            return 0;
+        if ($this->isCreateRequest($args)) {
+            return $this->createBranch($handler, $args[0]);
         }
 
-        // List
+        return $this->listBranches($handler);
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function isDeleteRequest(array $args): bool
+    {
+        return isset($args[0]) && $args[0] === '-d' && isset($args[1]);
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function isCreateRequest(array $args): bool
+    {
+        return isset($args[0]) && $args[0] !== '' && $args[0][0] !== '-';
+    }
+
+    private function deleteBranch(BranchHandler $handler, string $name): int
+    {
+        $handler->delete($name);
+        fwrite(STDOUT, sprintf("Deleted branch %s\n", $name));
+
+        return 0;
+    }
+
+    private function createBranch(BranchHandler $handler, string $name): int
+    {
+        $handler->create($name);
+        fwrite(STDOUT, sprintf("Created branch %s\n", $name));
+
+        return 0;
+    }
+
+    private function listBranches(BranchHandler $handler): int
+    {
         $branches = $handler->list();
         $currentBranch = $handler->getCurrentBranch();
 

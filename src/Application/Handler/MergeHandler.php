@@ -11,9 +11,11 @@ use Lukasojd\PureGit\Domain\Exception\PureGitException;
 use Lukasojd\PureGit\Domain\Index\IndexEntry;
 use Lukasojd\PureGit\Domain\Object\Blob;
 use Lukasojd\PureGit\Domain\Object\Commit;
+use Lukasojd\PureGit\Domain\Object\FileMode;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\PersonInfo;
 use Lukasojd\PureGit\Domain\Object\Tree;
+use Lukasojd\PureGit\Domain\Object\TreeEntry;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Infrastructure\Merge\ThreeWayMerge;
 
@@ -30,37 +32,26 @@ final readonly class MergeHandler
         $theirsRef = RefName::branch($branchName);
         $theirsId = $this->repository->refs->resolve($theirsRef);
 
-        // Check if already up to date
         if ($oursId->equals($theirsId)) {
             throw new PureGitException('Already up to date');
         }
 
-        // Find merge base
-        $baseId = $this->findMergeBase($oursId, $theirsId);
+        $resolver = new MergeBaseResolver($this->repository->objects);
+        $baseId = $resolver->findMergeBase($oursId, $theirsId);
 
-        // Fast-forward check
-        if ($baseId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId && $baseId->equals($oursId)) {
+        if ($baseId instanceof ObjectId && $baseId->equals($oursId)) {
             return $this->fastForward($theirsId);
         }
 
-        // 3-way merge
         return $this->threeWayMerge($oursId, $theirsId, $baseId, $branchName);
     }
 
     private function fastForward(ObjectId $targetId): ObjectId
     {
-        $head = RefName::head();
-        $symbolicRef = $this->repository->refs->getSymbolicRef($head);
-        if ($symbolicRef instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
-            $this->repository->refs->updateRef($symbolicRef, $targetId);
-        } else {
-            $this->repository->refs->updateRef($head, $targetId);
-        }
+        $this->updateHeadRef($targetId);
 
-        // Update working tree
         $commit = $this->repository->objects->read($targetId);
         if ($commit instanceof Commit) {
-            // Rebuild index and working tree from the new commit
             $index = new \Lukasojd\PureGit\Domain\Index\Index();
             $this->writeTreeToIndex($commit->treeId, '', $index);
             $this->repository->index->write($index);
@@ -80,9 +71,19 @@ final readonly class MergeHandler
             throw new PureGitException('Merge targets must be commits');
         }
 
+        $mergedFiles = $this->computeMergedFiles($oursCommit, $theirsCommit, $baseId);
+
+        return $this->finalizeMerge($mergedFiles, $oursId, $theirsId, $branchName);
+    }
+
+    /**
+     * @return array{files: array<string, string>, conflicted: list<string>}
+     */
+    private function computeMergedFiles(Commit $oursCommit, Commit $theirsCommit, ?ObjectId $baseId): array
+    {
         $oursFiles = $this->collectFiles($oursCommit->treeId);
         $theirsFiles = $this->collectFiles($theirsCommit->treeId);
-        $baseFiles = $baseId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId ? $this->collectFilesFromCommit($baseId) : [];
+        $baseFiles = $baseId instanceof ObjectId ? $this->collectFilesFromCommit($baseId) : [];
 
         $mergeStrategy = new ThreeWayMerge();
         $conflictedPaths = [];
@@ -92,149 +93,144 @@ final readonly class MergeHandler
         sort($allPaths);
 
         foreach ($allPaths as $path) {
-            $baseContent = $baseFiles[$path] ?? '';
-            $oursContent = $oursFiles[$path] ?? '';
-            $theirsContent = $theirsFiles[$path] ?? '';
-
-            if ($oursContent === $theirsContent) {
-                $mergedFiles[$path] = $oursContent;
-                continue;
-            }
-
-            if ($baseContent === $oursContent) {
-                $mergedFiles[$path] = $theirsContent;
-                continue;
-            }
-
-            if ($baseContent === $theirsContent) {
-                $mergedFiles[$path] = $oursContent;
-                continue;
-            }
-
-            // Both changed differently — 3-way merge
-            $result = $mergeStrategy->merge(
-                $this->splitLines($baseContent),
-                $this->splitLines($oursContent),
-                $this->splitLines($theirsContent),
+            $resolved = $this->resolvePathMerge(
+                $baseFiles[$path] ?? '',
+                $oursFiles[$path] ?? '',
+                $theirsFiles[$path] ?? '',
+                $mergeStrategy,
             );
 
-            $mergedFiles[$path] = $result->mergedContent;
+            $mergedFiles[$path] = $resolved['content'];
 
-            if ($result->isConflicted) {
+            if ($resolved['conflicted']) {
                 $conflictedPaths[] = $path;
             }
         }
 
-        if ($conflictedPaths !== []) {
-            // Write conflicted files to working tree
-            foreach ($mergedFiles as $path => $content) {
-                $fullPath = $this->repository->workDir . '/' . $path;
-                $dir = dirname($fullPath);
-                if (! is_dir($dir)) {
-                    mkdir($dir, 0o777, true);
-                }
-                $this->repository->filesystem->write($fullPath, $content);
-            }
+        return [
+            'files' => $mergedFiles,
+            'conflicted' => $conflictedPaths,
+        ];
+    }
 
-            throw new MergeConflictException($conflictedPaths);
+    /**
+     * @return array{content: string, conflicted: bool}
+     */
+    private function resolvePathMerge(string $baseContent, string $oursContent, string $theirsContent, ThreeWayMerge $mergeStrategy): array
+    {
+        if ($oursContent === $theirsContent) {
+            return [
+                'content' => $oursContent,
+                'conflicted' => false,
+            ];
         }
 
-        // Write merged files, create blobs, update index
+        if ($baseContent === $oursContent) {
+            return [
+                'content' => $theirsContent,
+                'conflicted' => false,
+            ];
+        }
+
+        if ($baseContent === $theirsContent) {
+            return [
+                'content' => $oursContent,
+                'conflicted' => false,
+            ];
+        }
+
+        $result = $mergeStrategy->merge(
+            $this->splitLines($baseContent),
+            $this->splitLines($oursContent),
+            $this->splitLines($theirsContent),
+        );
+
+        return [
+            'content' => $result->mergedContent,
+            'conflicted' => $result->isConflicted,
+        ];
+    }
+
+    /**
+     * @param array{files: array<string, string>, conflicted: list<string>} $mergedFiles
+     */
+    private function finalizeMerge(array $mergedFiles, ObjectId $oursId, ObjectId $theirsId, string $branchName): ObjectId
+    {
+        if ($mergedFiles['conflicted'] !== []) {
+            $this->writeMergedFilesToWorkDir($mergedFiles['files']);
+
+            throw new MergeConflictException($mergedFiles['conflicted']);
+        }
+
+        $this->writeMergedFilesToIndexAndWorkDir($mergedFiles['files']);
+
+        return $this->createMergeCommit($oursId, $theirsId, $branchName);
+    }
+
+    /**
+     * @param array<string, string> $files
+     */
+    private function writeMergedFilesToWorkDir(array $files): void
+    {
+        foreach ($files as $path => $content) {
+            $this->ensureDirectoryAndWriteFile($path, $content);
+        }
+    }
+
+    /**
+     * @param array<string, string> $files
+     */
+    private function writeMergedFilesToIndexAndWorkDir(array $files): void
+    {
         $index = $this->repository->index->read();
 
-        foreach ($mergedFiles as $path => $content) {
+        foreach ($files as $path => $content) {
             $blob = new Blob($content);
             $this->repository->objects->write($blob);
+            $this->ensureDirectoryAndWriteFile($path, $content);
 
-            $fullPath = $this->repository->workDir . '/' . $path;
-            $dir = dirname($fullPath);
-            if (! is_dir($dir)) {
-                mkdir($dir, 0o777, true);
-            }
-            $this->repository->filesystem->write($fullPath, $content);
-
-            $entry = IndexEntry::create($path, $blob->getId(), \Lukasojd\PureGit\Domain\Object\FileMode::Regular, strlen($content));
+            $entry = IndexEntry::create($path, $blob->getId(), FileMode::Regular, strlen($content));
             $index->addEntry($entry);
         }
 
         $this->repository->index->write($index);
+    }
 
-        // Create merge commit
+    private function ensureDirectoryAndWriteFile(string $path, string $content): void
+    {
+        $fullPath = $this->repository->workDir . '/' . $path;
+        $dir = dirname($fullPath);
+        if (! is_dir($dir)) {
+            mkdir($dir, 0o777, true);
+        }
+
+        $this->repository->filesystem->write($fullPath, $content);
+    }
+
+    private function createMergeCommit(ObjectId $oursId, ObjectId $theirsId, string $branchName): ObjectId
+    {
         $message = sprintf('Merge branch \'%s\'', $branchName);
         $now = new DateTimeImmutable();
         $person = new PersonInfo('PureGit User', 'user@puregit.local', $now);
 
-        // Build tree from index
         $treeId = $this->buildTreeFromIndex();
-
         $mergeCommit = new Commit($treeId, [$oursId, $theirsId], $person, $person, $message);
         $this->repository->objects->write($mergeCommit);
 
-        $head = RefName::head();
-        $symbolicRef = $this->repository->refs->getSymbolicRef($head);
-        if ($symbolicRef instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
-            $this->repository->refs->updateRef($symbolicRef, $mergeCommit->getId());
-        } else {
-            $this->repository->refs->updateRef($head, $mergeCommit->getId());
-        }
+        $this->updateHeadRef($mergeCommit->getId());
 
         return $mergeCommit->getId();
     }
 
-    private function findMergeBase(ObjectId $a, ObjectId $b): ?ObjectId
+    private function updateHeadRef(ObjectId $commitId): void
     {
-        $ancestorsA = $this->collectAncestors($a);
-        $queue = [$b];
-        $seen = [];
-
-        while ($queue !== []) {
-            $id = array_shift($queue);
-
-            if (isset($seen[$id->hash])) {
-                continue;
-            }
-            $seen[$id->hash] = true;
-
-            if (isset($ancestorsA[$id->hash])) {
-                return $id;
-            }
-
-            $object = $this->repository->objects->read($id);
-            if ($object instanceof Commit) {
-                foreach ($object->parents as $parentId) {
-                    $queue[] = $parentId;
-                }
-            }
+        $head = RefName::head();
+        $symbolicRef = $this->repository->refs->getSymbolicRef($head);
+        if ($symbolicRef instanceof RefName) {
+            $this->repository->refs->updateRef($symbolicRef, $commitId);
+        } else {
+            $this->repository->refs->updateRef($head, $commitId);
         }
-
-        return null;
-    }
-
-    /**
-     * @return array<string, true>
-     */
-    private function collectAncestors(ObjectId $id): array
-    {
-        $ancestors = [];
-        $queue = [$id];
-
-        while ($queue !== []) {
-            $currentId = array_shift($queue);
-
-            if (isset($ancestors[$currentId->hash])) {
-                continue;
-            }
-            $ancestors[$currentId->hash] = true;
-
-            $object = $this->repository->objects->read($currentId);
-            if ($object instanceof Commit) {
-                foreach ($object->parents as $parentId) {
-                    $queue[] = $parentId;
-                }
-            }
-        }
-
-        return $ancestors;
     }
 
     /**
@@ -273,15 +269,23 @@ final readonly class MergeHandler
 
         foreach ($tree->entries as $entry) {
             $path = $prefix === '' ? $entry->name : $prefix . '/' . $entry->name;
+            $this->collectTreeEntryContent($entry, $path, $files);
+        }
+    }
 
-            if ($entry->isTree()) {
-                $this->collectFilesRecursive($entry->objectId, $path, $files);
-            } else {
-                $blob = $this->repository->objects->read($entry->objectId);
-                if ($blob instanceof Blob) {
-                    $files[$path] = $blob->content;
-                }
-            }
+    /**
+     * @param array<string, string> $files
+     */
+    private function collectTreeEntryContent(TreeEntry $entry, string $path, array &$files): void
+    {
+        if ($entry->isTree()) {
+            $this->collectFilesRecursive($entry->objectId, $path, $files);
+            return;
+        }
+
+        $blob = $this->repository->objects->read($entry->objectId);
+        if ($blob instanceof Blob) {
+            $files[$path] = $blob->content;
         }
     }
 
@@ -294,16 +298,21 @@ final readonly class MergeHandler
 
         foreach ($tree->entries as $entry) {
             $path = $prefix === '' ? $entry->name : $prefix . '/' . $entry->name;
-
-            if ($entry->isTree()) {
-                $this->writeTreeToIndex($entry->objectId, $path, $index);
-            } else {
-                $blob = $this->repository->objects->read($entry->objectId);
-                $size = $blob instanceof Blob ? strlen($blob->content) : 0;
-                $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, $size);
-                $index->addEntry($indexEntry);
-            }
+            $this->writeEntryToIndex($entry, $path, $index);
         }
+    }
+
+    private function writeEntryToIndex(TreeEntry $entry, string $path, \Lukasojd\PureGit\Domain\Index\Index $index): void
+    {
+        if ($entry->isTree()) {
+            $this->writeTreeToIndex($entry->objectId, $path, $index);
+            return;
+        }
+
+        $blob = $this->repository->objects->read($entry->objectId);
+        $size = $blob instanceof Blob ? strlen($blob->content) : 0;
+        $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, $size);
+        $index->addEntry($indexEntry);
     }
 
     private function writeTreeToWorkDir(ObjectId $treeId, string $prefix): void
@@ -315,22 +324,26 @@ final readonly class MergeHandler
 
         foreach ($tree->entries as $entry) {
             $path = $prefix === '' ? $entry->name : $prefix . '/' . $entry->name;
-            $fullPath = $this->repository->workDir . '/' . $path;
-
-            if ($entry->isTree()) {
-                $this->repository->filesystem->mkdir($fullPath);
-                $this->writeTreeToWorkDir($entry->objectId, $path);
-            } else {
-                $blob = $this->repository->objects->read($entry->objectId);
-                if ($blob instanceof Blob) {
-                    $dir = dirname($fullPath);
-                    if (! is_dir($dir)) {
-                        mkdir($dir, 0o777, true);
-                    }
-                    $this->repository->filesystem->write($fullPath, $blob->content);
-                }
-            }
+            $this->writeEntryToWorkDir($entry, $path);
         }
+    }
+
+    private function writeEntryToWorkDir(TreeEntry $entry, string $path): void
+    {
+        $fullPath = $this->repository->workDir . '/' . $path;
+
+        if ($entry->isTree()) {
+            $this->repository->filesystem->mkdir($fullPath);
+            $this->writeTreeToWorkDir($entry->objectId, $path);
+            return;
+        }
+
+        $blob = $this->repository->objects->read($entry->objectId);
+        if (! $blob instanceof Blob) {
+            return;
+        }
+
+        $this->ensureDirectoryAndWriteFile($path, $blob->content);
     }
 
     private function buildTreeFromIndex(): ObjectId

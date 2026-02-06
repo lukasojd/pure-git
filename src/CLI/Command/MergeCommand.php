@@ -46,18 +46,28 @@ final class MergeCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new MergeHandler($repo);
 
+        return $this->performMerge($handler, $args[0]);
+    }
+
+    private function performMerge(MergeHandler $handler, string $branchName): int
+    {
         try {
-            $commitId = $handler->handle($args[0]);
+            $commitId = $handler->handle($branchName);
             fwrite(STDOUT, sprintf("Merge made with commit %s\n", $commitId->short()));
 
             return 0;
         } catch (MergeConflictException $e) {
-            fwrite(STDERR, "Automatic merge failed; fix conflicts and then commit the result.\n");
-            foreach ($e->conflictedPaths as $path) {
-                fwrite(STDERR, sprintf("  CONFLICT: %s\n", $path));
-            }
+            $this->printConflicts($e);
 
             return 1;
+        }
+    }
+
+    private function printConflicts(MergeConflictException $e): void
+    {
+        fwrite(STDERR, "Automatic merge failed; fix conflicts and then commit the result.\n");
+        foreach ($e->conflictedPaths as $path) {
+            fwrite(STDERR, sprintf("  CONFLICT: %s\n", $path));
         }
     }
 }

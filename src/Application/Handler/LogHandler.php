@@ -6,6 +6,7 @@ namespace Lukasojd\PureGit\Application\Handler;
 
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Object\Commit;
+use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 
 final readonly class LogHandler
@@ -25,31 +26,45 @@ final readonly class LogHandler
 
         $commits = [];
         $seen = [];
-
         $queue = [$commitId];
 
         while ($queue !== [] && count($commits) < $maxCount) {
             $id = array_shift($queue);
-
             if (isset($seen[$id->hash])) {
                 continue;
             }
             $seen[$id->hash] = true;
 
-            $object = $this->repository->objects->read($id);
-            if (! $object instanceof Commit) {
+            $commit = $this->readCommit($id);
+            if (! $commit instanceof Commit) {
                 continue;
             }
 
-            $commits[] = $object;
-
-            foreach ($object->parents as $parentId) {
-                if (! isset($seen[$parentId->hash])) {
-                    $queue[] = $parentId;
-                }
-            }
+            $commits[] = $commit;
+            $this->enqueueUnseen($commit->parents, $seen, $queue);
         }
 
         return $commits;
+    }
+
+    private function readCommit(ObjectId $id): ?Commit
+    {
+        $object = $this->repository->objects->read($id);
+
+        return $object instanceof Commit ? $object : null;
+    }
+
+    /**
+     * @param list<ObjectId> $parents
+     * @param array<string, true> $seen
+     * @param list<ObjectId> $queue
+     */
+    private function enqueueUnseen(array $parents, array $seen, array &$queue): void
+    {
+        foreach ($parents as $parentId) {
+            if (! isset($seen[$parentId->hash])) {
+                $queue[] = $parentId;
+            }
+        }
     }
 }

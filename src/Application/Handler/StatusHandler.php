@@ -23,55 +23,13 @@ final readonly class StatusHandler
     public function handle(): array
     {
         $index = $this->repository->index->read();
-
-        // Get HEAD tree entries
         $headEntries = $this->getHeadTreeEntries();
-
-        // Get working tree files
         $workingFiles = $this->getWorkingTreeFiles();
-
-        $staged = [];
-        $unstaged = [];
-        $untracked = [];
-
         $indexEntries = $index->getEntries();
 
-        // Compare index vs HEAD (staged changes)
-        foreach ($indexEntries as $path => $entry) {
-            if (! isset($headEntries[$path])) {
-                $staged[$path] = FileStatus::Added;
-            } elseif (! $entry->objectId->equals($headEntries[$path])) {
-                $staged[$path] = FileStatus::Modified;
-            }
-        }
-
-        // Files in HEAD but not in index (staged deletions)
-        foreach (array_keys($headEntries) as $path) {
-            if (! isset($indexEntries[$path])) {
-                $staged[$path] = FileStatus::Deleted;
-            }
-        }
-
-        // Compare working tree vs index (unstaged changes)
-        foreach ($indexEntries as $path => $entry) {
-            $fullPath = $this->repository->workDir . '/' . $path;
-            if (! file_exists($fullPath)) {
-                $unstaged[$path] = FileStatus::Deleted;
-            } else {
-                $content = $this->repository->filesystem->read($fullPath);
-                $workingBlob = new Blob($content);
-                if (! $workingBlob->getId()->equals($entry->objectId)) {
-                    $unstaged[$path] = FileStatus::Modified;
-                }
-            }
-        }
-
-        // Untracked files
-        foreach ($workingFiles as $file) {
-            if (! isset($indexEntries[$file])) {
-                $untracked[] = $file;
-            }
-        }
+        $staged = $this->computeStagedChanges($indexEntries, $headEntries);
+        $unstaged = $this->computeUnstagedChanges($indexEntries);
+        $untracked = $this->computeUntrackedFiles($workingFiles, $indexEntries);
 
         ksort($staged);
         ksort($unstaged);
@@ -82,6 +40,75 @@ final readonly class StatusHandler
             'unstaged' => $unstaged,
             'untracked' => $untracked,
         ];
+    }
+
+    /**
+     * @param array<string, \Lukasojd\PureGit\Domain\Index\IndexEntry> $indexEntries
+     * @param array<string, \Lukasojd\PureGit\Domain\Object\ObjectId> $headEntries
+     * @return array<string, FileStatus>
+     */
+    private function computeStagedChanges(array $indexEntries, array $headEntries): array
+    {
+        $staged = [];
+
+        foreach ($indexEntries as $path => $entry) {
+            if (! isset($headEntries[$path])) {
+                $staged[$path] = FileStatus::Added;
+            } elseif (! $entry->objectId->equals($headEntries[$path])) {
+                $staged[$path] = FileStatus::Modified;
+            }
+        }
+
+        foreach (array_keys($headEntries) as $path) {
+            if (! isset($indexEntries[$path])) {
+                $staged[$path] = FileStatus::Deleted;
+            }
+        }
+
+        return $staged;
+    }
+
+    /**
+     * @param array<string, \Lukasojd\PureGit\Domain\Index\IndexEntry> $indexEntries
+     * @return array<string, FileStatus>
+     */
+    private function computeUnstagedChanges(array $indexEntries): array
+    {
+        $unstaged = [];
+
+        foreach ($indexEntries as $path => $entry) {
+            $fullPath = $this->repository->workDir . '/' . $path;
+            if (! file_exists($fullPath)) {
+                $unstaged[$path] = FileStatus::Deleted;
+                continue;
+            }
+
+            $content = $this->repository->filesystem->read($fullPath);
+            $workingBlob = new Blob($content);
+            if (! $workingBlob->getId()->equals($entry->objectId)) {
+                $unstaged[$path] = FileStatus::Modified;
+            }
+        }
+
+        return $unstaged;
+    }
+
+    /**
+     * @param list<string> $workingFiles
+     * @param array<string, \Lukasojd\PureGit\Domain\Index\IndexEntry> $indexEntries
+     * @return list<string>
+     */
+    private function computeUntrackedFiles(array $workingFiles, array $indexEntries): array
+    {
+        $untracked = [];
+
+        foreach ($workingFiles as $file) {
+            if (! isset($indexEntries[$file])) {
+                $untracked[] = $file;
+            }
+        }
+
+        return $untracked;
     }
 
     /**
