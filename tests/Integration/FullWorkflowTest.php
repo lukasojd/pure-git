@@ -228,6 +228,40 @@ final class FullWorkflowTest extends TestCase
         self::assertSame([], $result['staged']);
     }
 
+    public function testGitignoreFiltering(): void
+    {
+        Repository::init($this->testDir);
+
+        // Create .gitignore and files, then re-open (like a real CLI invocation)
+        file_put_contents($this->testDir . '/.gitignore', "*.log\nbuild/\n");
+        file_put_contents($this->testDir . '/code.php', '<?php echo "hi";');
+        file_put_contents($this->testDir . '/debug.log', 'log data');
+        mkdir($this->testDir . '/build', 0o777, true);
+        file_put_contents($this->testDir . '/build/output.js', 'compiled');
+
+        // Re-open so GitignoreMatcher sees the .gitignore file
+        $repo = Repository::open($this->testDir);
+
+        // Status should not show ignored files as untracked
+        $status = new StatusHandler($repo);
+        $result = $status->handle();
+        self::assertContains('code.php', $result['untracked']);
+        self::assertContains('.gitignore', $result['untracked']);
+        self::assertNotContains('debug.log', $result['untracked']);
+
+        // Add . should not stage ignored files
+        $add = new AddHandler($repo);
+        $add->handle(['.gitignore', 'code.php']);
+
+        // Also test add with directory - build/ should be ignored
+        $add->handle(['build']);
+        $result = $status->handle();
+        self::assertArrayHasKey('code.php', $result['staged']);
+        self::assertArrayHasKey('.gitignore', $result['staged']);
+        self::assertArrayNotHasKey('debug.log', $result['staged']);
+        self::assertArrayNotHasKey('build/output.js', $result['staged']);
+    }
+
     private function removeDir(string $dir): void
     {
         if (! is_dir($dir)) {

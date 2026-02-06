@@ -101,9 +101,10 @@ final readonly class StatusHandler
     private function computeUntrackedFiles(array $workingFiles, array $indexEntries): array
     {
         $untracked = [];
+        $gitignore = $this->repository->gitignore;
 
         foreach ($workingFiles as $file) {
-            if (! isset($indexEntries[$file])) {
+            if (! isset($indexEntries[$file]) && (! $gitignore instanceof \Lukasojd\PureGit\Infrastructure\Gitignore\GitignoreMatcher || ! $gitignore->isIgnored($file))) {
                 $untracked[] = $file;
             }
         }
@@ -157,9 +158,14 @@ final readonly class StatusHandler
      */
     private function getWorkingTreeFiles(): array
     {
+        $gitignore = $this->repository->gitignore;
+
+        if ($gitignore instanceof \Lukasojd\PureGit\Infrastructure\Gitignore\GitignoreMatcher) {
+            return $gitignore->walkWorkingTree();
+        }
+
         $files = $this->repository->filesystem->listFilesRecursive($this->repository->workDir);
 
-        // Filter out .git directory
         return array_values(array_filter(
             $files,
             static fn (string $f): bool => ! str_starts_with($f, '.git/') && $f !== '.git',

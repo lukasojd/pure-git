@@ -47,9 +47,13 @@ final readonly class AddHandler
     {
         $fullPath = $this->repository->workDir . '/' . $relativePath;
         $files = $this->repository->filesystem->listFilesRecursive($fullPath);
+        $gitignore = $this->repository->gitignore;
 
         foreach ($files as $file) {
             $filePath = $relativePath . '/' . $file;
+            if ($gitignore instanceof \Lukasojd\PureGit\Infrastructure\Gitignore\GitignoreMatcher && $gitignore->isIgnored($filePath)) {
+                continue;
+            }
             $this->addFile($index, $filePath);
         }
     }

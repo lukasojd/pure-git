@@ -13,6 +13,7 @@ use Lukasojd\PureGit\Infrastructure\Cache\ObjectCache;
 use Lukasojd\PureGit\Infrastructure\CommitGraph\CommitGraphReader;
 use Lukasojd\PureGit\Infrastructure\Filesystem\FilesystemInterface;
 use Lukasojd\PureGit\Infrastructure\Filesystem\LocalFilesystem;
+use Lukasojd\PureGit\Infrastructure\Gitignore\GitignoreMatcher;
 use Lukasojd\PureGit\Infrastructure\Index\IndexFileHandler;
 use Lukasojd\PureGit\Infrastructure\Object\CombinedObjectStorage;
 use Lukasojd\PureGit\Infrastructure\Object\LooseObjectStorage;
@@ -30,6 +31,8 @@ final readonly class Repository
 
     public ?CommitGraphInterface $commitGraph;
 
+    public ?GitignoreMatcher $gitignore;
+
     private function __construct(
         public string $workDir,
         public string $gitDir
@@ -42,6 +45,7 @@ final readonly class Repository
         $this->refs = new FileRefStorage($this->gitDir);
         $this->index = new IndexFileHandler($this->gitDir . '/index');
         $this->commitGraph = $this->loadCommitGraph();
+        $this->gitignore = ($workDir !== $gitDir) ? new GitignoreMatcher($workDir, $gitDir) : null;
     }
 
     public static function init(string $path): self

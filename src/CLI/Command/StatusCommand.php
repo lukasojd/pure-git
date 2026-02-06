@@ -75,7 +75,8 @@ final class StatusCommand implements CliCommand
             return;
         }
 
-        fwrite(STDOUT, "\nChanges to be committed:\n");
+        fwrite(STDOUT, "Changes to be committed:\n");
+        fwrite(STDOUT, "  (use \"git restore --staged <file>...\" to unstage)\n");
         foreach ($staged as $path => $status) {
             $label = match ($status) {
                 FileStatus::Added => 'new file',
@@ -83,8 +84,9 @@ final class StatusCommand implements CliCommand
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
+            fwrite(STDOUT, sprintf("\t%s:   %s\n", $label, $path));
         }
+        fwrite(STDOUT, "\n");
     }
 
     /**
@@ -96,15 +98,18 @@ final class StatusCommand implements CliCommand
             return;
         }
 
-        fwrite(STDOUT, "\nChanges not staged for commit:\n");
+        fwrite(STDOUT, "Changes not staged for commit:\n");
+        fwrite(STDOUT, "  (use \"git add <file>...\" to update what will be committed)\n");
+        fwrite(STDOUT, "  (use \"git restore <file>...\" to discard changes in working directory)\n");
         foreach ($unstaged as $path => $status) {
             $label = match ($status) {
                 FileStatus::Modified => 'modified',
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("  %s: %s\n", $label, $path));
+            fwrite(STDOUT, sprintf("\t%s:   %s\n", $label, $path));
         }
+        fwrite(STDOUT, "\n");
     }
 
     /**
@@ -116,9 +121,11 @@ final class StatusCommand implements CliCommand
             return;
         }
 
-        fwrite(STDOUT, "\nUntracked files:\n");
+        fwrite(STDOUT, "Untracked files:\n");
+        fwrite(STDOUT, "  (use \"git add <file>...\" to include in what will be committed)\n");
         foreach ($untracked as $path) {
-            fwrite(STDOUT, sprintf("  %s\n", $path));
+            fwrite(STDOUT, sprintf("\t%s\n", $path));
         }
+        fwrite(STDOUT, "\n");
     }
 }

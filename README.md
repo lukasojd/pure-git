@@ -150,8 +150,6 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 
 ## Limitations
 
-- No SSH transport (HTTP/HTTPS and `git://` only)
-- No `.gitignore` support yet
 - No submodule support
 - No sparse checkout
 

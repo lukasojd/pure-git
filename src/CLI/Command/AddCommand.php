@@ -75,6 +75,12 @@ final class AddCommand implements CliCommand
      */
     private function collectAllWorkingTreeFiles(Repository $repo): array
     {
+        $gitignore = $repo->gitignore;
+
+        if ($gitignore instanceof \Lukasojd\PureGit\Infrastructure\Gitignore\GitignoreMatcher) {
+            return $gitignore->walkWorkingTree();
+        }
+
         $files = $repo->filesystem->listFilesRecursive($repo->workDir);
 
         return array_values(array_filter(
