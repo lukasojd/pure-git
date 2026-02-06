@@ -10,6 +10,7 @@ use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Infrastructure\Config\GitConfigReader;
+use Lukasojd\PureGit\Infrastructure\Config\GitConfigWriter;
 
 final readonly class BranchHandler
 {
@@ -53,6 +54,23 @@ final readonly class BranchHandler
     public function getCurrentBranch(): ?RefName
     {
         return $this->repository->refs->getSymbolicRef(RefName::head());
+    }
+
+    public function unsetUpstream(?string $branchName = null): void
+    {
+        if ($branchName === null) {
+            $current = $this->getCurrentBranch();
+            if (! $current instanceof RefName) {
+                throw new PureGitException('HEAD is not on a branch');
+            }
+            $branchName = $current->shortName();
+        }
+
+        $configPath = $this->repository->gitDir . '/config';
+        $section = 'branch "' . $branchName . '"';
+        $writer = new GitConfigWriter();
+        $writer->unsetKey($configPath, $section, 'remote');
+        $writer->unsetKey($configPath, $section, 'merge');
     }
 
     public function getTrackingInfo(?RefName $branch = null): ?TrackingInfo

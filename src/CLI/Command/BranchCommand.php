@@ -21,7 +21,7 @@ final class BranchCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'branch [<name>] [-d <name>]';
+        return 'branch [<name>] [-d <name>] [--unset-upstream [<name>]]';
     }
 
     /**
@@ -39,6 +39,10 @@ final class BranchCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new BranchHandler($repo);
 
+        if ($this->isUnsetUpstreamRequest($args)) {
+            return $this->unsetUpstream($handler, $args[1] ?? null);
+        }
+
         if ($this->isDeleteRequest($args)) {
             return $this->deleteBranch($handler, $args[1]);
         }
@@ -48,6 +52,14 @@ final class BranchCommand implements CliCommand
         }
 
         return $this->listBranches($handler);
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function isUnsetUpstreamRequest(array $args): bool
+    {
+        return isset($args[0]) && $args[0] === '--unset-upstream';
     }
 
     /**
@@ -64,6 +76,13 @@ final class BranchCommand implements CliCommand
     private function isCreateRequest(array $args): bool
     {
         return isset($args[0]) && $args[0] !== '' && $args[0][0] !== '-';
+    }
+
+    private function unsetUpstream(BranchHandler $handler, ?string $name): int
+    {
+        $handler->unsetUpstream($name);
+
+        return 0;
     }
 
     private function deleteBranch(BranchHandler $handler, string $name): int
