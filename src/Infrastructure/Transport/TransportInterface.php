@@ -14,11 +14,13 @@ interface TransportInterface
     public function listRefs(): array;
 
     /**
+     * Fetch objects into a packfile written to the given path.
+     *
      * @param list<ObjectId> $wants
      * @param list<ObjectId> $haves
-     * @return string packfile data
+     * @return string path to the generated packfile
      */
-    public function fetchPack(array $wants, array $haves = []): string;
+    public function fetchPack(array $wants, array $haves = [], ?string $outputPath = null): string;
 
     /**
      * @return string packfile data to send

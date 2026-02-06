@@ -220,8 +220,44 @@ bench('11. Fetch pack (2 commits deep)', function () use ($repo, $headId) {
 
     $haves = $headCommit2->parents;
 
-    $packData = $transport->fetchPack([$headId], $haves);
-    return sprintf('(%d KB pack)', strlen($packData) / 1024);
+    $packPath = $transport->fetchPack([$headId], $haves);
+    $size = file_exists($packPath) ? filesize($packPath) : 0;
+    @unlink($packPath);
+    return sprintf('(%d KB pack)', $size / 1024);
+});
+
+// 11b. Fetch pack (5 commits deep)
+bench('11b. Fetch pack (5 commits deep)', function () use ($repo, $headId) {
+    $transport = new LocalTransport('/private/tmp/pure-git-clone');
+
+    $seen = [];
+    $queue = [$headId];
+    $commits = [];
+    while ($queue !== [] && count($commits) < 5) {
+        $id = array_shift($queue);
+        if (isset($seen[$id->hash])) {
+            continue;
+        }
+        $seen[$id->hash] = true;
+        $commit = $repo->objects->read($id);
+        assert($commit instanceof Commit);
+        $commits[] = $id;
+        foreach ($commit->parents as $parent) {
+            $queue[] = $parent;
+        }
+    }
+
+    $haves = [];
+    if (count($commits) >= 5) {
+        $lastCommit = $repo->objects->read($commits[count($commits) - 1]);
+        assert($lastCommit instanceof Commit);
+        $haves = $lastCommit->parents;
+    }
+
+    $packPath = $transport->fetchPack([$headId], $haves);
+    $size = file_exists($packPath) ? filesize($packPath) : 0;
+    @unlink($packPath);
+    return sprintf('(%d KB pack)', $size / 1024);
 });
 
 // 12. Read 50 random tags

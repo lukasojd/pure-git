@@ -52,7 +52,7 @@ final readonly class LocalTransport implements TransportInterface
      * @param list<ObjectId> $wants
      * @param list<ObjectId> $haves
      */
-    public function fetchPack(array $wants, array $haves = []): string
+    public function fetchPack(array $wants, array $haves = [], ?string $outputPath = null): string
     {
         $objectStorage = $this->createRemoteObjectStorage();
 
@@ -60,7 +60,10 @@ final readonly class LocalTransport implements TransportInterface
         $ids = $this->collectObjectIds($objectStorage, $wants, $haves);
         $count = count($ids);
 
-        return $this->serializePack($this->yieldRawObjects($objectStorage, $ids), $count);
+        $packPath = $outputPath ?? sys_get_temp_dir() . '/pure-git-pack-' . getmypid() . '.pack';
+        $this->serializePack($this->yieldRawObjects($objectStorage, $ids), $count, $packPath);
+
+        return $packPath;
     }
 
     public function sendPack(string $packData, string $refUpdates): string
@@ -187,14 +190,31 @@ final readonly class LocalTransport implements TransportInterface
     }
 
     /**
-     * Serialize objects into a pack format, consuming generator one at a time.
+     * Serialize objects into a pack format using streaming file I/O.
+     *
+     * Writes each object directly to a file to avoid accumulating the
+     * entire pack in memory. Each generator item is consumed and discarded
+     * before the next, keeping peak memory proportional to the largest single object.
      *
      * @param Generator<int, RawObject> $objects
      */
-    private function serializePack(Generator $objects, int $count): string
+    private function serializePack(Generator $objects, int $count, string $outputPath): void
     {
+        $dir = dirname($outputPath);
+        if (! is_dir($dir)) {
+            mkdir($dir, 0o777, true);
+        }
+
+        $tmpPath = $outputPath . '.tmp.' . getmypid();
+        $fh = fopen($tmpPath, 'wb');
+        if ($fh === false) {
+            return;
+        }
+
+        $hashCtx = hash_init('sha1');
+
         $header = 'PACK' . pack('N', 2) . pack('N', $count);
-        $chunks = [$header];
+        $this->writeAndHash($fh, $hashCtx, $header);
 
         foreach ($objects as $raw) {
             $type = match ($raw->type) {
@@ -204,14 +224,25 @@ final readonly class LocalTransport implements TransportInterface
                 ObjectType::Tag => 4,
             };
 
-            $chunks[] = $this->encodeObjectHeader($type, strlen($raw->data));
+            $this->writeAndHash($fh, $hashCtx, $this->encodeObjectHeader($type, strlen($raw->data)));
             $compressed = gzcompress($raw->data);
-            $chunks[] = $compressed !== false ? $compressed : '';
+            $this->writeAndHash($fh, $hashCtx, $compressed !== false ? $compressed : '');
         }
 
-        $data = implode('', $chunks);
+        $checksum = hash_final($hashCtx, true);
+        fwrite($fh, $checksum);
+        fclose($fh);
 
-        return $data . hash('sha1', $data, true);
+        rename($tmpPath, $outputPath);
+    }
+
+    /**
+     * @param resource $fh
+     */
+    private function writeAndHash($fh, \HashContext $hashCtx, string $data): void
+    {
+        fwrite($fh, $data);
+        hash_update($hashCtx, $data);
     }
 
     private function encodeObjectHeader(int $type, int $size): string
