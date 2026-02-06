@@ -14,29 +14,46 @@ final class ObjectCache
      */
     private array $cache = [];
 
+    /**
+     * @var array<string, int> hash => access counter for LRU
+     */
+    private array $accessOrder = [];
+
     private int $size = 0;
 
+    private int $accessCounter = 0;
+
     public function __construct(
-        private readonly int $maxSize = 1024,
+        private readonly int $maxSize = 4096,
     ) {
     }
 
     public function get(ObjectId $id): ?GitObject
     {
-        return $this->cache[$id->hash] ?? null;
+        $hash = $id->hash;
+        if (! isset($this->cache[$hash])) {
+            return null;
+        }
+
+        $this->accessOrder[$hash] = ++$this->accessCounter;
+
+        return $this->cache[$hash];
     }
 
     public function set(ObjectId $id, GitObject $object): void
     {
-        if ($this->size >= $this->maxSize && ! isset($this->cache[$id->hash])) {
+        $hash = $id->hash;
+
+        if ($this->size >= $this->maxSize && ! isset($this->cache[$hash])) {
             $this->evict();
         }
 
-        if (! isset($this->cache[$id->hash])) {
+        if (! isset($this->cache[$hash])) {
             $this->size++;
         }
 
-        $this->cache[$id->hash] = $object;
+        $this->cache[$hash] = $object;
+        $this->accessOrder[$hash] = ++$this->accessCounter;
     }
 
     public function has(ObjectId $id): bool
@@ -47,17 +64,24 @@ final class ObjectCache
     public function clear(): void
     {
         $this->cache = [];
+        $this->accessOrder = [];
         $this->size = 0;
+        $this->accessCounter = 0;
     }
 
     private function evict(): void
     {
-        $keys = array_keys($this->cache);
+        asort($this->accessOrder);
         $removeCount = (int) ($this->maxSize * 0.25);
+        $removed = 0;
 
-        for ($i = 0; $i < $removeCount && $i < count($keys); $i++) {
-            unset($this->cache[$keys[$i]]);
+        foreach (array_keys($this->accessOrder) as $hash) {
+            if ($removed >= $removeCount) {
+                break;
+            }
+            unset($this->cache[$hash], $this->accessOrder[$hash]);
             $this->size--;
+            $removed++;
         }
     }
 }

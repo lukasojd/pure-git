@@ -89,16 +89,7 @@ final class PackfileReader
     private function readWholeObject($handle, int $type, int $size): RawObject
     {
         $objectType = $this->packTypeToObjectType($type);
-        $readSize = max(1, $size + 512);
-        $compressed = fread($handle, $readSize);
-        if ($compressed === false) {
-            throw new InvalidObjectException('Failed to read pack object data');
-        }
-
-        $data = zlib_decode($compressed, $size);
-        if ($data === false) {
-            throw new InvalidObjectException('Failed to decompress pack object');
-        }
+        $data = $this->readCompressedData($handle, $size);
 
         return new RawObject($objectType, $size, $data);
     }
@@ -117,17 +108,7 @@ final class PackfileReader
         }
 
         $baseOffset = $currentOffset - $negativeOffset;
-
-        $readSize = max(1, $deltaSize + 512);
-        $compressed = fread($handle, $readSize);
-        if ($compressed === false) {
-            throw new InvalidObjectException('Failed to read delta data');
-        }
-
-        $deltaData = zlib_decode($compressed, $deltaSize);
-        if ($deltaData === false) {
-            throw new InvalidObjectException('Failed to decompress delta');
-        }
+        $deltaData = $this->readCompressedData($handle, $deltaSize);
 
         $baseObject = $this->readAtOffset($baseOffset);
 
@@ -147,17 +128,7 @@ final class PackfileReader
         }
 
         $baseId = ObjectId::fromBinary($baseHash);
-
-        $readSize = max(1, $deltaSize + 512);
-        $compressed = fread($handle, $readSize);
-        if ($compressed === false) {
-            throw new InvalidObjectException('Failed to read delta data');
-        }
-
-        $deltaData = zlib_decode($compressed, $deltaSize);
-        if ($deltaData === false) {
-            throw new InvalidObjectException('Failed to decompress delta');
-        }
+        $deltaData = $this->readCompressedData($handle, $deltaSize);
 
         $baseObject = $this->readObject($baseId);
 
@@ -175,6 +146,38 @@ final class PackfileReader
             self::OBJ_TAG => ObjectType::Tag,
             default => throw new InvalidObjectException(sprintf('Unknown pack type: %d', $type)),
         };
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function readCompressedData($handle, int $expectedSize): string
+    {
+        $context = inflate_init(ZLIB_ENCODING_DEFLATE);
+        if ($context === false) {
+            throw new InvalidObjectException('Failed to init zlib inflate');
+        }
+
+        $chunks = [];
+        $totalSize = 0;
+
+        while ($totalSize < $expectedSize) {
+            $chunkSize = min(65536, $expectedSize - $totalSize + 512);
+            $compressed = fread($handle, $chunkSize);
+            if ($compressed === false || $compressed === '') {
+                throw new InvalidObjectException('Unexpected end of compressed data');
+            }
+
+            $decompressed = inflate_add($context, $compressed, ZLIB_SYNC_FLUSH);
+            if ($decompressed === false) {
+                throw new InvalidObjectException('Failed to decompress pack data');
+            }
+
+            $chunks[] = $decompressed;
+            $totalSize += strlen($decompressed);
+        }
+
+        return implode('', $chunks);
     }
 
     /**

@@ -29,29 +29,31 @@ final class BinaryReader
 
     public function readUint8(): int
     {
-        $bytes = $this->readBytes(1);
-        /** @var array{value: int} $unpacked */
-        $unpacked = unpack('Cvalue', $bytes);
+        $this->assertAvailable(1);
+        $value = ord($this->data[$this->offset]);
+        $this->offset++;
 
-        return $unpacked['value'];
+        return $value;
     }
 
     public function readUint16(): int
     {
-        $bytes = $this->readBytes(2);
-        /** @var array{value: int} $unpacked */
-        $unpacked = unpack('nvalue', $bytes);
+        $this->assertAvailable(2);
+        /** @var array{v: int} $unpacked */
+        $unpacked = unpack('nv', $this->data, $this->offset);
+        $this->offset += 2;
 
-        return $unpacked['value'];
+        return $unpacked['v'];
     }
 
     public function readUint32(): int
     {
-        $bytes = $this->readBytes(4);
-        /** @var array{value: int} $unpacked */
-        $unpacked = unpack('Nvalue', $bytes);
+        $this->assertAvailable(4);
+        /** @var array{v: int} $unpacked */
+        $unpacked = unpack('Nv', $this->data, $this->offset);
+        $this->offset += 4;
 
-        return $unpacked['value'];
+        return $unpacked['v'];
     }
 
     public function readNullTerminated(): string

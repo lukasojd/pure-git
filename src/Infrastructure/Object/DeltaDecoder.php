@@ -34,23 +34,23 @@ final class DeltaDecoder
 
     private static function processInstructions(string $baseData, string $deltaData, int $offset, int $deltaLen): string
     {
-        $result = '';
+        $chunks = [];
 
         while ($offset < $deltaLen) {
             $cmd = ord($deltaData[$offset]);
             $offset++;
 
             if (($cmd & 0x80) !== 0) {
-                $result .= self::processCopyInstruction($baseData, $deltaData, $cmd, $offset);
+                $chunks[] = self::processCopyInstruction($baseData, $deltaData, $cmd, $offset);
             } elseif ($cmd > 0) {
-                $result .= substr($deltaData, $offset, $cmd);
+                $chunks[] = substr($deltaData, $offset, $cmd);
                 $offset += $cmd;
             } else {
                 throw new InvalidObjectException('Invalid delta instruction: zero byte');
             }
         }
 
-        return $result;
+        return implode('', $chunks);
     }
 
     private static function processCopyInstruction(string $baseData, string $deltaData, int $cmd, int &$offset): string

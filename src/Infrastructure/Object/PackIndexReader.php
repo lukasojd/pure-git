@@ -6,12 +6,11 @@ namespace Lukasojd\PureGit\Infrastructure\Object;
 
 use Lukasojd\PureGit\Domain\Exception\InvalidObjectException;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
-use Lukasojd\PureGit\Support\BinaryReader;
 
 final class PackIndexReader
 {
     /**
-     * @var array<string, int> object hash => pack offset
+     * @var array<string, int> object hash (hex) => pack offset
      */
     private array $entries = [];
 
@@ -57,41 +56,40 @@ final class PackIndexReader
             throw new InvalidObjectException(sprintf('Cannot read pack index: %s', $this->indexPath));
         }
 
-        $reader = new BinaryReader($data);
+        $this->parseIndex($data);
+        $this->loaded = true;
+    }
 
-        $magic = $reader->readBytes(4);
+    private function parseIndex(string $data): void
+    {
+        $magic = substr($data, 0, 4);
         if ($magic !== "\xfftOc") {
             throw new InvalidObjectException('Invalid pack index magic');
         }
 
-        $version = $reader->readUint32();
-        if ($version !== 2) {
-            throw new InvalidObjectException(sprintf('Unsupported pack index version: %d', $version));
+        /** @var array{v: int} $unpacked */
+        $unpacked = unpack('Nv', $data, 4);
+        if ($unpacked['v'] !== 2) {
+            throw new InvalidObjectException(sprintf('Unsupported pack index version: %d', $unpacked['v']));
         }
 
-        $fanout = [];
-        for ($i = 0; $i < 256; $i++) {
-            $fanout[] = $reader->readUint32();
-        }
-        $totalObjects = $fanout[255];
+        // Fanout: 256 x uint32 starting at offset 8
+        /** @var array<int, int> $fanout */
+        $fanout = unpack('N256', $data, 8);
+        $totalObjects = $fanout[256];
 
-        $hashes = [];
-        for ($i = 0; $i < $totalObjects; $i++) {
-            $hashes[] = bin2hex($reader->readBytes(20));
-        }
-
-        // Skip CRC32 values
-        $reader->skip($totalObjects * 4);
-
-        $offsets = [];
-        for ($i = 0; $i < $totalObjects; $i++) {
-            $offsets[] = $reader->readUint32();
-        }
+        // Hashes start at offset 8 + 1024
+        $hashesOffset = 1032;
+        // CRC32 starts after hashes
+        $crcOffset = $hashesOffset + $totalObjects * 20;
+        // Offsets start after CRC32
+        $offsetsOffset = $crcOffset + $totalObjects * 4;
 
         for ($i = 0; $i < $totalObjects; $i++) {
-            $this->entries[$hashes[$i]] = $offsets[$i];
+            $hash = bin2hex(substr($data, $hashesOffset + ($i * 20), 20));
+            /** @var array{o: int} $off */
+            $off = unpack('No', $data, $offsetsOffset + ($i * 4));
+            $this->entries[$hash] = $off['o'];
         }
-
-        $this->loaded = true;
     }
 }
