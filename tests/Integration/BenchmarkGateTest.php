@@ -141,9 +141,11 @@ final class BenchmarkGateTest extends TestCase
         $elapsed = (hrtime(true) - $start) / 1_000_000;
 
         // Pack writing 100 objects should complete within 500ms
-        $this->assertLessThan(500, $elapsed, sprintf(
-            'Pack write took %.1f ms (expected < 500ms)',
+        $limit = 500 * $this->xdebugSlowdown();
+        $this->assertLessThan($limit, $elapsed, sprintf(
+            'Pack write took %.1f ms (expected < %dms)',
             $elapsed,
+            $limit,
         ));
     }
 
@@ -162,9 +164,11 @@ final class BenchmarkGateTest extends TestCase
         $elapsed = (hrtime(true) - $start) / 1_000_000;
 
         // 100 delta encodes of ~25KB objects should complete within 2 seconds
-        $this->assertLessThan(2000, $elapsed, sprintf(
-            '100 delta encodes took %.1f ms (expected < 2000ms)',
+        $limit = 2000 * $this->xdebugSlowdown();
+        $this->assertLessThan($limit, $elapsed, sprintf(
+            '100 delta encodes took %.1f ms (expected < %dms)',
             $elapsed,
+            $limit,
         ));
     }
 
@@ -235,6 +239,11 @@ final class BenchmarkGateTest extends TestCase
             $time5,
             $time2,
         ));
+    }
+
+    private function xdebugSlowdown(): int
+    {
+        return extension_loaded('xdebug') ? 20 : 1;
     }
 
     /**
