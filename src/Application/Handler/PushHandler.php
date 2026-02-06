@@ -12,6 +12,7 @@ use Lukasojd\PureGit\Domain\Object\ObjectType;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Domain\Repository\RawObject;
 use Lukasojd\PureGit\Infrastructure\Config\GitConfigReader;
+use Lukasojd\PureGit\Infrastructure\Config\GitConfigWriter;
 use Lukasojd\PureGit\Infrastructure\Transport\PktLine;
 use Lukasojd\PureGit\Infrastructure\Transport\StreamingPackSerializer;
 use Lukasojd\PureGit\Infrastructure\Transport\TransportFactory;
@@ -75,6 +76,19 @@ final readonly class PushHandler
             remoteUrl: $url,
             refUpdates: [$refUpdate],
         );
+    }
+
+    public function setUpstreamTracking(string $remoteName, string $localRef): void
+    {
+        $branchName = str_starts_with($localRef, 'refs/heads/')
+            ? substr($localRef, strlen('refs/heads/'))
+            : $localRef;
+
+        $configPath = $this->repository->gitDir . '/config';
+        $writer = new GitConfigWriter();
+        $section = 'branch "' . $branchName . '"';
+        $writer->set($configPath, $section, 'remote', $remoteName);
+        $writer->set($configPath, $section, 'merge', 'refs/heads/' . $branchName);
     }
 
     /**
@@ -178,6 +192,10 @@ final readonly class PushHandler
                 continue;
             }
             $seen[$id->hash] = true;
+
+            if (! $this->repository->objects->exists($id)) {
+                continue;
+            }
 
             $raw = $this->repository->objects->readRaw($id);
             $this->enqueueChildren($raw, $queue, $seen);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Lukasojd\PureGit\CLI\Command;
 
 use Lukasojd\PureGit\Application\Handler\PushHandler;
+use Lukasojd\PureGit\Application\Handler\PushResult;
 use Lukasojd\PureGit\Application\Service\Repository;
 
 final class PushCommand implements CliCommand
@@ -21,7 +22,7 @@ final class PushCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'push [<remote>] [<refspec>]';
+        return 'push [-u|--set-upstream] [<remote>] [<refspec>]';
     }
 
     /**
@@ -29,7 +30,7 @@ final class PushCommand implements CliCommand
      */
     public function execute(array $args): int
     {
-        [$remoteName, $refspec] = $this->parseArgs($args);
+        [$remoteName, $refspec, $setUpstream] = $this->parseArgs($args);
 
         $cwd = getcwd();
         if ($cwd === false) {
@@ -44,21 +45,33 @@ final class PushCommand implements CliCommand
 
         $this->printResult($result);
 
+        if ($setUpstream && ! $result->upToDate) {
+            $localRef = $refspec ?? $this->getCurrentBranch($repository);
+            if ($localRef !== null) {
+                $handler->setUpstreamTracking($remoteName, $localRef);
+                $branchName = $this->shortRefName($localRef);
+                fwrite(STDERR, sprintf("branch '%s' set up to track '%s/%s'.\n", $branchName, $remoteName, $branchName));
+            }
+        }
+
         return 0;
     }
 
     /**
      * @param list<string> $args
-     * @return array{string, string|null}
+     * @return array{string, string|null, bool}
      */
     private function parseArgs(array $args): array
     {
         $remoteName = 'origin';
         $refspec = null;
+        $setUpstream = false;
 
         $positional = [];
         foreach ($args as $arg) {
-            if (! str_starts_with($arg, '-')) {
+            if ($arg === '-u' || $arg === '--set-upstream') {
+                $setUpstream = true;
+            } elseif (! str_starts_with($arg, '-')) {
                 $positional[] = $arg;
             }
         }
@@ -70,10 +83,10 @@ final class PushCommand implements CliCommand
             $refspec = $positional[1];
         }
 
-        return [$remoteName, $refspec];
+        return [$remoteName, $refspec, $setUpstream];
     }
 
-    private function printResult(\Lukasojd\PureGit\Application\Handler\PushResult $result): void
+    private function printResult(PushResult $result): void
     {
         fwrite(STDERR, sprintf("To %s\n", $result->remoteUrl));
 
@@ -110,5 +123,17 @@ final class PushCommand implements CliCommand
         }
 
         return $refName;
+    }
+
+    private function getCurrentBranch(Repository $repository): ?string
+    {
+        $head = \Lukasojd\PureGit\Domain\Ref\RefName::head();
+        $symbolicRef = $repository->refs->getSymbolicRef($head);
+
+        if ($symbolicRef instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
+            return $symbolicRef->value;
+        }
+
+        return null;
     }
 }
