@@ -71,7 +71,12 @@ final readonly class BranchHandler
 
         $upstreamRef = RefName::fromString($upstreamRefPath);
         if (! $this->repository->refs->exists($upstreamRef)) {
-            return null;
+            return new TrackingInfo(
+                upstream: $upstreamRef->shortName(),
+                ahead: 0,
+                behind: 0,
+                gone: true,
+            );
         }
 
         $localId = $this->repository->refs->resolve($branch);

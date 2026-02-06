@@ -10,11 +10,19 @@ final readonly class TrackingInfo
         public string $upstream,
         public int $ahead,
         public int $behind,
+        public bool $gone = false,
     ) {
     }
 
     public function formatMessage(): string
     {
+        if ($this->gone) {
+            return sprintf(
+                "Your branch is based on '%s', but the upstream is gone.\n  (use \"git branch --unset-upstream\" to fixup)",
+                $this->upstream,
+            );
+        }
+
         if ($this->ahead === 0 && $this->behind === 0) {
             return sprintf("Your branch is up to date with '%s'.", $this->upstream);
         }
