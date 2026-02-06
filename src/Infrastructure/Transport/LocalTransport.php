@@ -66,9 +66,11 @@ final readonly class LocalTransport implements TransportInterface
         return $packPath;
     }
 
-    public function sendPack(string $packData, string $refUpdates): string
+    public function sendPack(string $refUpdateLines, string $packPath): string
     {
-        throw new PureGitException('Push via local transport not yet supported');
+        $installer = new LocalPackInstaller($this->remoteGitDir);
+
+        return $installer->installAndApply($refUpdateLines, $packPath);
     }
 
     private function createRemoteObjectStorage(): CombinedObjectStorage

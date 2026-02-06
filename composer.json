@@ -7,12 +7,13 @@
     "prefer-stable": true,
     "require": {
         "php": "^8.4",
+        "ext-ctype": "*",
+        "ext-curl": "*",
         "ext-hash": "*",
-        "ext-zlib": "*",
         "ext-json": "*",
         "ext-mbstring": "*",
-        "ext-ctype": "*",
-        "ext-curl": "*"
+        "ext-zlib": "*",
+        "phpseclib/phpseclib": "^3.0"
     },
     "require-dev": {
         "phpstan/phpstan": "^2.0",
@@ -36,13 +37,14 @@
         "bin/puregit"
     ],
     "scripts": {
-        "test": "phpunit",
-        "test:coverage": "phpunit --coverage-html coverage",
+        "test": "phpunit --exclude-group acceptance",
+        "test:coverage": "phpunit --exclude-group acceptance --coverage-html coverage",
         "stan": "phpstan analyse --memory-limit=512M",
         "rector": "rector process",
         "rector:check": "rector process --dry-run",
         "ecs": "ecs check --fix",
         "ecs:check": "ecs check",
+        "test:acceptance": "phpunit --testsuite Acceptance",
         "qa": [
             "@ecs:check",
             "@stan",

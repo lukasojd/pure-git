@@ -82,7 +82,7 @@ final readonly class GitTransport implements TransportInterface
         }
     }
 
-    public function sendPack(string $packData, string $refUpdates): string
+    public function sendPack(string $refUpdateLines, string $packPath): string
     {
         throw new PureGitException('Push via git:// transport not supported (read-only protocol)');
     }

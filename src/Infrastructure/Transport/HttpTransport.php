@@ -58,9 +58,66 @@ final readonly class HttpTransport implements TransportInterface
         return $receiver->finish();
     }
 
-    public function sendPack(string $packData, string $refUpdates): string
+    public function sendPack(string $refUpdateLines, string $packPath): string
     {
-        throw new PureGitException('Push via HTTP transport not yet supported');
+        $body = $refUpdateLines . PktLine::flush();
+
+        $packContent = file_get_contents($packPath);
+        if ($packContent !== false) {
+            $body .= $packContent;
+        }
+
+        return $this->httpPostRaw(
+            $this->url . '/git-receive-pack',
+            $body,
+            'application/x-git-receive-pack-request',
+        );
+    }
+
+    /**
+     * Discover receive-pack refs via HTTP.
+     *
+     * @return array<string, ObjectId>
+     */
+    public function listReceivePackRefs(): array
+    {
+        $response = $this->httpGet($this->url . '/info/refs?service=git-receive-pack');
+
+        return $this->parseRefAdvertisement($response);
+    }
+
+    private function httpPostRaw(string $url, string $body, string $contentType): string
+    {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new PureGitException('Failed to initialize cURL');
+        }
+
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: ' . $contentType,
+            'User-Agent: pure-git/0.1',
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 300);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false || ! is_string($response)) {
+            throw new PureGitException(sprintf('HTTP POST failed: %s', $error));
+        }
+
+        if ($httpCode !== 200) {
+            throw new PureGitException(sprintf('HTTP POST %s returned %d', $url, $httpCode));
+        }
+
+        return $response;
     }
 
     /**

@@ -23,7 +23,11 @@ interface TransportInterface
     public function fetchPack(array $wants, array $haves = [], ?string $outputPath = null): string;
 
     /**
-     * @return string packfile data to send
+     * Push objects and ref updates to the remote.
+     *
+     * @param string $refUpdateLines pkt-line encoded ref update commands
+     * @param string $packPath path to the packfile to send
+     * @return string server response
      */
-    public function sendPack(string $packData, string $refUpdates): string;
+    public function sendPack(string $refUpdateLines, string $packPath): string;
 }

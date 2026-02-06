@@ -18,6 +18,10 @@ final class TransportFactory
             return new GitTransport($url);
         }
 
+        if (SshUrlParser::isSshUrl($url)) {
+            return new SshTransport($url);
+        }
+
         // Assume local path
         if (is_dir($url) || is_dir($url . '/.git')) {
             return new LocalTransport($url);

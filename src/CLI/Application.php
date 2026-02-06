@@ -12,10 +12,13 @@ use Lukasojd\PureGit\CLI\Command\CloneCommand;
 use Lukasojd\PureGit\CLI\Command\CommitCommand;
 use Lukasojd\PureGit\CLI\Command\CommitGraphCommand;
 use Lukasojd\PureGit\CLI\Command\DiffCommand;
+use Lukasojd\PureGit\CLI\Command\FetchCommand;
 use Lukasojd\PureGit\CLI\Command\InitCommand;
 use Lukasojd\PureGit\CLI\Command\LogCommand;
 use Lukasojd\PureGit\CLI\Command\MergeCommand;
 use Lukasojd\PureGit\CLI\Command\MvCommand;
+use Lukasojd\PureGit\CLI\Command\PullCommand;
+use Lukasojd\PureGit\CLI\Command\PushCommand;
 use Lukasojd\PureGit\CLI\Command\ResetCommand;
 use Lukasojd\PureGit\CLI\Command\RmCommand;
 use Lukasojd\PureGit\CLI\Command\ShowCommand;
@@ -49,6 +52,9 @@ final class Application
         $this->registerCommand(new MvCommand());
         $this->registerCommand(new CommitGraphCommand());
         $this->registerCommand(new CloneCommand());
+        $this->registerCommand(new FetchCommand());
+        $this->registerCommand(new PullCommand());
+        $this->registerCommand(new PushCommand());
     }
 
     /**

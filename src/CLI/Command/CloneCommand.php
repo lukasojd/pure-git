@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Lukasojd\PureGit\CLI\Command;
 
 use Lukasojd\PureGit\Domain\Object\ObjectId;
+use Lukasojd\PureGit\Infrastructure\Transport\SshUrlParser;
 use Lukasojd\PureGit\Infrastructure\Transport\TransportFactory;
 use Lukasojd\PureGit\Infrastructure\Transport\TransportInterface;
 
@@ -95,9 +96,15 @@ final class CloneCommand implements CliCommand
 
     private function deriveTargetDir(string $url): string
     {
-        $path = parse_url($url, PHP_URL_PATH);
-        if (! is_string($path)) {
-            $path = $url;
+        // parse_url fails on SCP-like URLs (git@host:path) — use SshUrlParser as fallback
+        $sshParsed = SshUrlParser::tryParse($url);
+        if ($sshParsed instanceof SshUrlParser) {
+            $path = $sshParsed->path;
+        } else {
+            $path = parse_url($url, PHP_URL_PATH);
+            if (! is_string($path)) {
+                $path = $url;
+            }
         }
 
         $basename = basename($path);

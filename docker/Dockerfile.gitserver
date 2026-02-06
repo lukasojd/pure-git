@@ -1,0 +1,33 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+    git \
+    git-daemon \
+    openssh-server \
+    nginx \
+    fcgiwrap \
+    spawn-fcgi \
+    bash
+
+# SSH setup
+RUN ssh-keygen -A \
+    && adduser -D -s /bin/bash git \
+    && mkdir -p /home/git/.ssh \
+    && chmod 700 /home/git/.ssh \
+    && echo "git:*" | chpasswd 2>/dev/null; passwd -u git 2>/dev/null; true
+
+# Nginx for smart HTTP
+COPY docker/nginx-git.conf /etc/nginx/http.d/git.conf
+RUN rm -f /etc/nginx/http.d/default.conf
+
+# Bare repo init script
+COPY docker/init-repo.sh /usr/local/bin/init-repo.sh
+RUN chmod +x /usr/local/bin/init-repo.sh
+
+# Entrypoint
+COPY docker/entrypoint-gitserver.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22 80 9418
+
+CMD ["/entrypoint.sh"]

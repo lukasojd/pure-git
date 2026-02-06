@@ -58,9 +58,19 @@ bin/puregit reset [--soft|--mixed|--hard] <commit>
 # Show object
 bin/puregit show [<object>]
 
-# Clone a repository (HTTP/HTTPS or git:// protocol)
+# Clone a repository (SSH, HTTP/HTTPS, or git:// protocol)
 bin/puregit clone <url> [<directory>]
 bin/puregit clone --bare <url> [<directory>]
+
+# Fetch from remote
+bin/puregit fetch [<remote>]
+
+# Pull (fetch + merge or rebase)
+bin/puregit pull [<remote>]
+bin/puregit pull --rebase [<remote>]
+
+# Push to remote
+bin/puregit push [<remote>] [<refspec>]
 
 # Commit graph (fast commit counting)
 bin/puregit commit-graph write
@@ -78,6 +88,9 @@ use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Application\Handler\AddHandler;
 use Lukasojd\PureGit\Application\Handler\CommitHandler;
 use Lukasojd\PureGit\Application\Handler\LogHandler;
+use Lukasojd\PureGit\Application\Handler\FetchHandler;
+use Lukasojd\PureGit\Application\Handler\PullHandler;
+use Lukasojd\PureGit\Application\Handler\PushHandler;
 
 // Initialize
 $repo = Repository::init('/path/to/repo');
@@ -96,6 +109,21 @@ $commitId = $commit->handle('Initial commit');
 // Log
 $log = new LogHandler($repo);
 $commits = $log->handle(10);
+
+// Fetch
+$fetch = new FetchHandler($repo);
+$fetchResult = $fetch->fetch('origin');
+
+// Pull (fetch + merge)
+$pull = new PullHandler($repo);
+$pullResult = $pull->pull('origin');
+
+// Pull with rebase
+$pullResult = $pull->pull('origin', rebase: true);
+
+// Push
+$push = new PushHandler($repo);
+$pushResult = $push->push('origin');
 ```
 
 ## Architecture
@@ -110,6 +138,18 @@ Hexagonal architecture with clean separation:
 
 See [docs/architecture.md](docs/architecture.md) for details.
 
+## Transport Protocols
+
+PureGit supports three remote transport protocols — all implemented in pure PHP:
+
+| Protocol | Clone | Fetch | Push | Library |
+|----------|-------|-------|------|---------|
+| HTTP/HTTPS | Yes | Yes | Yes | ext-curl |
+| SSH | Yes | Yes | Yes | phpseclib/phpseclib |
+| git:// | Yes | Yes | No (read-only) | TCP sockets |
+
+SSH transport uses [phpseclib](https://phpseclib.com/) for key-based authentication — no system `ssh` binary needed.
+
 ## Quality Assurance
 
 ```bash
@@ -123,6 +163,23 @@ composer rector:check  # refactoring check (Rector)
 composer test          # PHPUnit tests
 composer test:coverage # tests with coverage report
 ```
+
+### Acceptance Tests
+
+Docker-based acceptance tests verify the full clone → fetch → pull → push cycle over real SSH and HTTP transports:
+
+```bash
+# Start git server + PHP client containers
+docker compose up -d --build --wait
+
+# Run acceptance tests inside the container
+docker compose exec puregit vendor/bin/phpunit --testsuite Acceptance --testdox
+
+# Clean up
+docker compose down -v
+```
+
+Acceptance tests run automatically in GitHub Actions CI after the QA pipeline passes.
 
 ## Performance
 
@@ -148,10 +205,19 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 | defunkt/dotjs | 872 | 0.84 s | 0.70 s | 1.2x | < 32 MB |
 | sebastianbergmann/phpunit | 232K | 25.1 s | 9.8 s | 2.6x | < 256 MB |
 
+## Features
+
+- **Local operations**: init, add, commit, status, log, diff, branch, tag, checkout, merge, reset, show, rm, mv
+- **Remote operations**: clone, fetch, pull (merge & rebase), push
+- **Transport**: SSH (phpseclib), HTTP/HTTPS (curl), git:// (TCP)
+- **Internals**: loose objects, packfiles with delta encoding, pack index v2, commit-graph, three-way merge, rebase (cherry-pick chain)
+- **Performance**: object cache (LRU), streaming pack I/O, BFS with binary hash path, commit-graph for instant history queries
+
 ## Limitations
 
 - No submodule support
 - No sparse checkout
+- No shallow clone
 
 ## License
 

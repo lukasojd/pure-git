@@ -1,0 +1,41 @@
+services:
+  gitserver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gitserver
+    volumes:
+      - ssh-keys:/tmp/ssh-keys
+    ports:
+      - "2222:22"
+      - "8080:80"
+      - "9418:9418"
+    healthcheck:
+      test: ["CMD", "git", "ls-remote", "file:///srv/git/test-repo.git"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  puregit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.puregit
+    volumes:
+      - ssh-keys:/tmp/ssh-keys
+    depends_on:
+      gitserver:
+        condition: service_healthy
+    environment:
+      - GIT_SERVER_HOST=gitserver
+      - GIT_SERVER_SSH_PORT=22
+      - GIT_SERVER_HTTP_PORT=80
+      - GIT_REPO_PATH=/srv/git/test-repo.git
+    entrypoint: >
+      sh -c "
+        mkdir -p /root/.ssh &&
+        cp /tmp/ssh-keys/id_ed25519 /root/.ssh/id_ed25519 &&
+        chmod 600 /root/.ssh/id_ed25519 &&
+        sleep infinity
+      "
+
+volumes:
+  ssh-keys:

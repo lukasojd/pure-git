@@ -29,6 +29,21 @@ final class GitConfigReader
     }
 
     /**
+     * @return list<string>
+     */
+    public function listRemotes(): array
+    {
+        $remotes = [];
+        foreach (array_keys($this->sections) as $section) {
+            if (preg_match('/^remote "(.+)"$/', $section, $matches) === 1) {
+                $remotes[] = $matches[1];
+            }
+        }
+
+        return $remotes;
+    }
+
+    /**
      * Get the upstream remote-tracking ref for a branch.
      *
      * Reads [branch "X"] remote + merge, returns "refs/remotes/{remote}/{branch}".

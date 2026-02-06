@@ -28,9 +28,23 @@ final readonly class MergeHandler
 
     public function handle(string $branchName): ObjectId
     {
-        $oursId = $this->repository->refs->resolve(RefName::head());
         $theirsRef = RefName::branch($branchName);
         $theirsId = $this->repository->refs->resolve($theirsRef);
+
+        return $this->doMerge($theirsId, $branchName);
+    }
+
+    public function mergeRef(string $refPath): ObjectId
+    {
+        $theirsId = $this->repository->refs->resolve(RefName::fromString($refPath));
+        $label = str_starts_with($refPath, 'refs/remotes/') ? substr($refPath, 13) : $refPath;
+
+        return $this->doMerge($theirsId, $label);
+    }
+
+    private function doMerge(ObjectId $theirsId, string $label): ObjectId
+    {
+        $oursId = $this->repository->refs->resolve(RefName::head());
 
         if ($oursId->equals($theirsId)) {
             throw new PureGitException('Already up to date');
@@ -43,7 +57,7 @@ final readonly class MergeHandler
             return $this->fastForward($theirsId);
         }
 
-        return $this->threeWayMerge($oursId, $theirsId, $baseId, $branchName);
+        return $this->threeWayMerge($oursId, $theirsId, $baseId, $label);
     }
 
     private function fastForward(ObjectId $targetId): ObjectId

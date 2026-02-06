@@ -100,6 +100,12 @@ final class CombinedObjectStorage implements ObjectStorageInterface
         return $this->looseStorage->readRawHeaderByBinary($binHash);
     }
 
+    public function refreshPacks(): void
+    {
+        $this->packReaders = [];
+        $this->packsLoaded = false;
+    }
+
     private function ensurePacksLoaded(): void
     {
         if ($this->packsLoaded) {
