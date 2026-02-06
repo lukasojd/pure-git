@@ -1,0 +1,55 @@
+{
+    "name": "lukasojd/pure-git",
+    "description": "A fully functional Git implementation in pure PHP — no external git binary, no shell calls.",
+    "type": "library",
+    "license": "MIT",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "require": {
+        "php": "^8.4",
+        "ext-hash": "*",
+        "ext-zlib": "*",
+        "ext-json": "*",
+        "ext-mbstring": "*",
+        "ext-ctype": "*"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "phpunit/phpunit": "^11.0",
+        "rector/rector": "^2.0",
+        "symplify/easy-coding-standard": "^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Lukasojd\\PureGit\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lukasojd\\PureGit\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/puregit"
+    ],
+    "scripts": {
+        "test": "phpunit",
+        "test:coverage": "phpunit --coverage-html coverage",
+        "stan": "phpstan analyse --memory-limit=512M",
+        "rector": "rector process",
+        "rector:check": "rector process --dry-run",
+        "ecs": "ecs check --fix",
+        "ecs:check": "ecs check",
+        "qa": [
+            "@ecs:check",
+            "@stan",
+            "@rector:check",
+            "@test"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {}
+    }
+}
