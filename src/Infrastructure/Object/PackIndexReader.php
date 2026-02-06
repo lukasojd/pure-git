@@ -131,22 +131,35 @@ final class PackIndexReader
             return;
         }
 
+        if ($this->totalObjects === 0) {
+            $this->offsetToHash = [];
+            return;
+        }
+
+        // Sequential pass 1: read all hashes
+        $hashBytes = max(1, $this->totalObjects * self::HASH_SIZE);
+        fseek($fh, $this->hashesOffset);
+        $hashData = fread($fh, $hashBytes);
+        if ($hashData === false) {
+            $this->offsetToHash = [];
+            return;
+        }
+
+        // Sequential pass 2: read all offsets
+        $offsetBytes = max(1, $this->totalObjects * self::OFFSET_SIZE);
+        fseek($fh, $this->offsetsOffset);
+        $offsetData = fread($fh, $offsetBytes);
+        if ($offsetData === false) {
+            $this->offsetToHash = [];
+            return;
+        }
+
+        // Build map from bulk reads
         $map = [];
         for ($i = 0; $i < $this->totalObjects; $i++) {
-            fseek($fh, $this->hashesOffset + ($i * self::HASH_SIZE));
-            $hash = fread($fh, self::HASH_SIZE);
-            if ($hash === false || strlen($hash) < self::HASH_SIZE) {
-                break;
-            }
-
-            fseek($fh, $this->offsetsOffset + ($i * self::OFFSET_SIZE));
-            $offData = fread($fh, self::OFFSET_SIZE);
-            if ($offData === false || strlen($offData) < self::OFFSET_SIZE) {
-                break;
-            }
-
+            $hash = substr($hashData, $i * self::HASH_SIZE, self::HASH_SIZE);
             /** @var array{o: int} $off */
-            $off = unpack('No', $offData);
+            $off = unpack('No', $offsetData, $i * self::OFFSET_SIZE);
             $map[$off['o']] = bin2hex($hash);
         }
 

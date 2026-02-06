@@ -25,25 +25,20 @@ final readonly class Commit implements GitObject
 
     public static function fromSerialized(string $data): self
     {
-        $lines = explode("\n", $data);
+        $boundary = strpos($data, "\n\n");
+        if ($boundary === false) {
+            throw InvalidObjectException::corruptObject('', 'Missing header/message boundary');
+        }
+
+        $message = substr($data, $boundary + 2);
+        $headerLines = explode("\n", substr($data, 0, $boundary));
+
         $treeId = null;
         $parents = [];
         $author = null;
         $committer = null;
-        $messageStart = false;
-        $messageLines = [];
 
-        foreach ($lines as $line) {
-            if ($messageStart) {
-                $messageLines[] = $line;
-                continue;
-            }
-
-            if ($line === '') {
-                $messageStart = true;
-                continue;
-            }
-
+        foreach ($headerLines as $line) {
             $spacePos = strpos($line, ' ');
             if ($spacePos === false) {
                 throw InvalidObjectException::corruptObject('', 'Invalid commit line');
@@ -72,7 +67,7 @@ final readonly class Commit implements GitObject
             throw InvalidObjectException::corruptObject('', 'Missing required commit fields');
         }
 
-        return new self($treeId, $parents, $author, $committer, implode("\n", $messageLines));
+        return new self($treeId, $parents, $author, $committer, $message);
     }
 
     public function getId(): ObjectId

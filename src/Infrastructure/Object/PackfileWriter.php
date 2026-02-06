@@ -93,13 +93,18 @@ final class PackfileWriter
      */
     private function sortObjects(array $objects): array
     {
-        usort($objects, function (GitObject $a, GitObject $b): int {
+        $sizeMap = [];
+        foreach ($objects as $obj) {
+            $sizeMap[$obj->getId()->hash] = strlen($obj->serialize());
+        }
+
+        usort($objects, function (GitObject $a, GitObject $b) use ($sizeMap): int {
             $typePriority = $this->typePriority($a->getType()) <=> $this->typePriority($b->getType());
             if ($typePriority !== 0) {
                 return $typePriority;
             }
 
-            return strlen($b->serialize()) <=> strlen($a->serialize());
+            return $sizeMap[$b->getId()->hash] <=> $sizeMap[$a->getId()->hash];
         });
 
         return $objects;

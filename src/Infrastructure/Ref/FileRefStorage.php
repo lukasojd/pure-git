@@ -10,10 +10,17 @@ use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Domain\Repository\RefStorageInterface;
 use Lukasojd\PureGit\Infrastructure\Lock\LockFile;
 
-final readonly class FileRefStorage implements RefStorageInterface
+final class FileRefStorage implements RefStorageInterface
 {
+    /**
+     * @var array<string, ObjectId>|null
+     */
+    private ?array $packedRefsCache = null;
+
+    private int $packedRefsMtime = 0;
+
     public function __construct(
-        private string $gitDir,
+        private readonly string $gitDir,
     ) {
     }
 
@@ -128,29 +135,7 @@ final readonly class FileRefStorage implements RefStorageInterface
 
     private function findInPackedRefs(RefName $ref): ?ObjectId
     {
-        $packedRefsPath = $this->gitDir . '/packed-refs';
-        if (! file_exists($packedRefsPath)) {
-            return null;
-        }
-
-        $content = file_get_contents($packedRefsPath);
-        if ($content === false) {
-            return null;
-        }
-
-        foreach (explode("\n", $content) as $line) {
-            $line = trim($line);
-            if ($line === '' || $line[0] === '#' || $line[0] === '^') {
-                continue;
-            }
-
-            $parts = explode(' ', $line, 2);
-            if (count($parts) === 2 && $parts[1] === $ref->value) {
-                return ObjectId::fromHex($parts[0]);
-            }
-        }
-
-        return null;
+        return $this->getPackedRefs()[$ref->value] ?? null;
     }
 
     /**
@@ -158,16 +143,46 @@ final readonly class FileRefStorage implements RefStorageInterface
      */
     private function readPackedRefs(array &$refs, string $prefix): void
     {
+        foreach ($this->getPackedRefs() as $name => $id) {
+            if (str_starts_with($name, $prefix)) {
+                $refs[$name] = $id;
+            }
+        }
+    }
+
+    /**
+     * @return array<string, ObjectId>
+     */
+    private function getPackedRefs(): array
+    {
         $packedRefsPath = $this->gitDir . '/packed-refs';
-        if (! file_exists($packedRefsPath)) {
-            return;
+        $mtime = @filemtime($packedRefsPath);
+        if ($mtime === false) {
+            $this->packedRefsCache = null;
+            return [];
         }
 
-        $content = file_get_contents($packedRefsPath);
+        if ($this->packedRefsCache !== null && $mtime === $this->packedRefsMtime) {
+            return $this->packedRefsCache;
+        }
+
+        $this->packedRefsCache = $this->parsePackedRefs($packedRefsPath);
+        $this->packedRefsMtime = $mtime;
+
+        return $this->packedRefsCache;
+    }
+
+    /**
+     * @return array<string, ObjectId>
+     */
+    private function parsePackedRefs(string $path): array
+    {
+        $content = file_get_contents($path);
         if ($content === false) {
-            return;
+            return [];
         }
 
+        $refs = [];
         foreach (explode("\n", $content) as $line) {
             $line = trim($line);
             if ($line === '' || $line[0] === '#' || $line[0] === '^') {
@@ -175,10 +190,12 @@ final readonly class FileRefStorage implements RefStorageInterface
             }
 
             $parts = explode(' ', $line, 2);
-            if (count($parts) === 2 && str_starts_with($parts[1], $prefix)) {
+            if (count($parts) === 2) {
                 $refs[$parts[1]] = ObjectId::fromHex($parts[0]);
             }
         }
+
+        return $refs;
     }
 
     /**

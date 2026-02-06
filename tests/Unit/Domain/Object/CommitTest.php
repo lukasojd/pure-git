@@ -47,6 +47,33 @@ final class CommitTest extends TestCase
         self::assertFalse($restored->isRoot());
     }
 
+    public function testMessageWithMultipleBlankLines(): void
+    {
+        $treeId = ObjectId::fromHex('da39a3ee5e6b4b0d3255bfef95601890afd80709');
+        $author = new PersonInfo('Test', 'test@test.com', new DateTimeImmutable('@1704067200', new DateTimeZone('+0000')));
+
+        $message = "First paragraph\n\nSecond paragraph\n\n\nThird with extra blank";
+        $commit = new Commit($treeId, [], $author, $author, $message);
+        $restored = Commit::fromSerialized($commit->serialize());
+
+        self::assertSame($message, $restored->message);
+        self::assertTrue($commit->getId()->equals($restored->getId()));
+    }
+
+    public function testMessageWithNonAsciiText(): void
+    {
+        $treeId = ObjectId::fromHex('da39a3ee5e6b4b0d3255bfef95601890afd80709');
+        $author = new PersonInfo('Lukáš', 'lukas@test.cz', new DateTimeImmutable('@1704067200', new DateTimeZone('+0100')));
+
+        $message = 'Opravit chybu v kódování — přidána podpora pro české znaky 🎉';
+        $commit = new Commit($treeId, [], $author, $author, $message);
+        $restored = Commit::fromSerialized($commit->serialize());
+
+        self::assertSame($message, $restored->message);
+        self::assertSame('Lukáš', $restored->author->name);
+        self::assertTrue($commit->getId()->equals($restored->getId()));
+    }
+
     public function testContentAddressedId(): void
     {
         $treeId = ObjectId::fromHex('da39a3ee5e6b4b0d3255bfef95601890afd80709');
