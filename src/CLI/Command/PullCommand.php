@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\CLI\Command;
 
+use Lukasojd\PureGit\Application\Handler\DiffHandler;
 use Lukasojd\PureGit\Application\Handler\FetchResult;
 use Lukasojd\PureGit\Application\Handler\PullHandler;
+use Lukasojd\PureGit\Application\Handler\PullResult;
 use Lukasojd\PureGit\Application\Handler\RefUpdate;
 use Lukasojd\PureGit\Application\Service\Repository;
+use Lukasojd\PureGit\CLI\Formatter\DiffStatFormatter;
+use Lukasojd\PureGit\Domain\Object\ObjectId;
+use Lukasojd\PureGit\Infrastructure\Diff\MyersDiffAlgorithm;
 
 final class PullCommand implements CliCommand
 {
@@ -52,7 +57,7 @@ final class PullCommand implements CliCommand
             return 0;
         }
 
-        $this->printMergeResult($result);
+        $this->printMergeResult($result, $repository);
 
         return 0;
     }
@@ -105,16 +110,52 @@ final class PullCommand implements CliCommand
         }
     }
 
-    private function printMergeResult(
-        \Lukasojd\PureGit\Application\Handler\PullResult $result,
-    ): void {
+    private function printMergeResult(PullResult $result, Repository $repository): void
+    {
+        $this->printUpdateLine($result);
+        $this->printStrategyLine($result);
+        $this->printDiffStat($result, $repository);
+    }
+
+    private function printUpdateLine(PullResult $result): void
+    {
+        if (! $result->oldHeadId instanceof ObjectId || ! $result->newHeadId instanceof ObjectId) {
+            return;
+        }
+
+        fwrite(STDOUT, sprintf(
+            "Updating %s..%s\n",
+            $result->oldHeadId->short(),
+            $result->newHeadId->short(),
+        ));
+    }
+
+    private function printStrategyLine(PullResult $result): void
+    {
         if ($result->rebase) {
             fwrite(STDOUT, "Successfully rebased.\n");
         } elseif ($result->fastForward) {
             fwrite(STDOUT, "Fast-forward\n");
-        } elseif ($result->mergeCommitId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId) {
-            fwrite(STDOUT, sprintf("Merge made by the 'ort' strategy. Commit: %s\n", $result->mergeCommitId->short()));
+        } elseif ($result->mergeCommitId instanceof ObjectId) {
+            fwrite(STDOUT, "Merge made by the 'ort' strategy.\n");
         }
+    }
+
+    private function printDiffStat(PullResult $result, Repository $repository): void
+    {
+        if (! $result->oldHeadId instanceof ObjectId || ! $result->newHeadId instanceof ObjectId) {
+            return;
+        }
+
+        $diffHandler = new DiffHandler($repository, new MyersDiffAlgorithm());
+        $diffs = $diffHandler->diffCommits($result->oldHeadId, $result->newHeadId);
+
+        if ($diffs === []) {
+            return;
+        }
+
+        $stat = DiffStatFormatter::format($diffs);
+        fwrite(STDOUT, $stat . "\n");
     }
 
     private function shortRefName(string $refName): string

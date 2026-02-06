@@ -14,6 +14,8 @@ final readonly class PullResult
         public bool $upToDate,
         public bool $fastForward,
         public bool $rebase,
+        public ?ObjectId $oldHeadId = null,
+        public ?ObjectId $newHeadId = null,
     ) {
     }
 }

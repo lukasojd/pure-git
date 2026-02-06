@@ -25,9 +25,9 @@ final readonly class PullHandler
         $fetchResult = $fetchHandler->fetch($remoteName);
 
         $theirsId = $this->repository->refs->resolve(RefName::fromString($trackingRef));
-        $headId = $this->repository->refs->resolve(RefName::head());
+        $oldHeadId = $this->repository->refs->resolve(RefName::head());
 
-        if ($headId->equals($theirsId)) {
+        if ($oldHeadId->equals($theirsId)) {
             return new PullResult(
                 fetchResult: $fetchResult,
                 mergeCommitId: null,
@@ -38,16 +38,17 @@ final readonly class PullHandler
         }
 
         if ($rebase) {
-            return $this->pullRebase($fetchResult, $theirsId);
+            return $this->pullRebase($fetchResult, $oldHeadId, $theirsId);
         }
 
-        return $this->pullMerge($fetchResult, $trackingRef, $theirsId);
+        return $this->pullMerge($fetchResult, $trackingRef, $oldHeadId, $theirsId);
     }
 
-    private function pullRebase(FetchResult $fetchResult, ObjectId $theirsId): PullResult
+    private function pullRebase(FetchResult $fetchResult, ObjectId $oldHeadId, ObjectId $theirsId): PullResult
     {
         $rebaseHandler = new RebaseHandler($this->repository);
         $result = $rebaseHandler->rebase($theirsId);
+        $newHeadId = $this->repository->refs->resolve(RefName::head());
 
         return new PullResult(
             fetchResult: $fetchResult,
@@ -55,18 +56,20 @@ final readonly class PullHandler
             upToDate: false,
             fastForward: $result->replayedCommits === 0,
             rebase: true,
+            oldHeadId: $oldHeadId,
+            newHeadId: $newHeadId,
         );
     }
 
-    private function pullMerge(FetchResult $fetchResult, string $trackingRef, ObjectId $theirsId): PullResult
+    private function pullMerge(FetchResult $fetchResult, string $trackingRef, ObjectId $oldHeadId, ObjectId $theirsId): PullResult
     {
-        $headId = $this->repository->refs->resolve(RefName::head());
         $resolver = new MergeBaseResolver($this->repository->objects);
-        $baseId = $resolver->findMergeBase($headId, $theirsId);
-        $isFastForward = $baseId instanceof ObjectId && $baseId->equals($headId);
+        $baseId = $resolver->findMergeBase($oldHeadId, $theirsId);
+        $isFastForward = $baseId instanceof ObjectId && $baseId->equals($oldHeadId);
 
         $mergeHandler = new MergeHandler($this->repository);
         $mergeId = $mergeHandler->mergeRef($trackingRef);
+        $newHeadId = $this->repository->refs->resolve(RefName::head());
 
         return new PullResult(
             fetchResult: $fetchResult,
@@ -74,6 +77,8 @@ final readonly class PullHandler
             upToDate: false,
             fastForward: $isFastForward,
             rebase: false,
+            oldHeadId: $oldHeadId,
+            newHeadId: $newHeadId,
         );
     }
 
