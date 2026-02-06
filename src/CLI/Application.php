@@ -11,6 +11,7 @@ use Lukasojd\PureGit\CLI\Command\CliCommand;
 use Lukasojd\PureGit\CLI\Command\CloneCommand;
 use Lukasojd\PureGit\CLI\Command\CommitCommand;
 use Lukasojd\PureGit\CLI\Command\CommitGraphCommand;
+use Lukasojd\PureGit\CLI\Command\ConfigCommand;
 use Lukasojd\PureGit\CLI\Command\DiffCommand;
 use Lukasojd\PureGit\CLI\Command\FetchCommand;
 use Lukasojd\PureGit\CLI\Command\InitCommand;
@@ -55,6 +56,7 @@ final class Application
         $this->registerCommand(new FetchCommand());
         $this->registerCommand(new PullCommand());
         $this->registerCommand(new PushCommand());
+        $this->registerCommand(new ConfigCommand());
     }
 
     /**

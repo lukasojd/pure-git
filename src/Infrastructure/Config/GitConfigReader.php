@@ -29,6 +29,14 @@ final class GitConfigReader
     }
 
     /**
+     * @return array<string, array<string, string>>
+     */
+    public function getAll(): array
+    {
+        return $this->sections;
+    }
+
+    /**
      * @return list<string>
      */
     public function listRemotes(): array

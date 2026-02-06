@@ -129,8 +129,9 @@ final readonly class CommitHandler
 
     private function resolveIdentity(): PersonInfo
     {
-        $name = $this->getConfigValue('user.name');
-        $email = $this->getConfigValue('user.email');
+        $configHandler = new ConfigHandler($this->repository->gitDir);
+        $name = $configHandler->get('user.name');
+        $email = $configHandler->get('user.email');
 
         if ($name === null || $email === null) {
             throw new PureGitException(
@@ -143,72 +144,5 @@ final readonly class CommitHandler
         }
 
         return new PersonInfo($name, $email, new DateTimeImmutable());
-    }
-
-    private function getConfigValue(string $key): ?string
-    {
-        // Local .git/config takes precedence
-        $value = $this->readFromConfigFile($this->repository->gitDir . '/config', $key);
-        if ($value !== null) {
-            return $value;
-        }
-
-        // Fall back to ~/.gitconfig
-        $home = getenv('HOME');
-        if ($home !== false) {
-            return $this->readFromConfigFile($home . '/.gitconfig', $key);
-        }
-
-        return null;
-    }
-
-    private function readFromConfigFile(string $configPath, string $key): ?string
-    {
-        if (! file_exists($configPath)) {
-            return null;
-        }
-
-        $content = file_get_contents($configPath);
-        if ($content === false) {
-            return null;
-        }
-
-        return $this->findConfigProperty($content, $key);
-    }
-
-    private function findConfigProperty(string $content, string $key): ?string
-    {
-        $parts = explode('.', $key, 2);
-        if (count($parts) !== 2) {
-            return null;
-        }
-
-        [$section, $property] = $parts;
-
-        return $this->searchSectionForProperty($content, $section, $property);
-    }
-
-    private function searchSectionForProperty(string $content, string $section, string $property): ?string
-    {
-        $inSection = false;
-
-        foreach (explode("\n", $content) as $line) {
-            $line = trim($line);
-            if (preg_match('/^\[(.+)\]$/', $line, $m) === 1) {
-                $inSection = strtolower($m[1]) === strtolower($section);
-                continue;
-            }
-
-            if (! $inSection || ! str_contains($line, '=')) {
-                continue;
-            }
-
-            [$k, $v] = explode('=', $line, 2);
-            if (trim($k) === $property) {
-                return trim($v);
-            }
-        }
-
-        return null;
     }
 }
