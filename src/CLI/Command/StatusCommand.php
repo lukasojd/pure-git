@@ -11,6 +11,12 @@ use Lukasojd\PureGit\Domain\Diff\FileStatus;
 
 final class StatusCommand implements CliCommand
 {
+    private const string GREEN = "\033[32m";
+
+    private const string RED = "\033[31m";
+
+    private const string RESET = "\033[0m";
+
     public function name(): string
     {
         return 'status';
@@ -88,7 +94,7 @@ final class StatusCommand implements CliCommand
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("\t%s:   %s\n", $label, $path));
+            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", self::GREEN, $label, $path, self::RESET));
         }
         fwrite(STDOUT, "\n");
     }
@@ -111,7 +117,7 @@ final class StatusCommand implements CliCommand
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("\t%s:   %s\n", $label, $path));
+            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", self::RED, $label, $path, self::RESET));
         }
         fwrite(STDOUT, "\n");
     }
@@ -128,7 +134,7 @@ final class StatusCommand implements CliCommand
         fwrite(STDOUT, "Untracked files:\n");
         fwrite(STDOUT, "  (use \"git add <file>...\" to include in what will be committed)\n");
         foreach ($untracked as $path) {
-            fwrite(STDOUT, sprintf("\t%s\n", $path));
+            fwrite(STDOUT, sprintf("\t%s%s%s\n", self::RED, $path, self::RESET));
         }
         fwrite(STDOUT, "\n");
     }

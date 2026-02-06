@@ -36,7 +36,7 @@ final class FullWorkflowTest extends TestCase
     public function testInitAddCommitLogStatus(): void
     {
         // Init
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
         self::assertDirectoryExists($this->testDir . '/.git');
         self::assertDirectoryExists($this->testDir . '/.git/objects');
         self::assertDirectoryExists($this->testDir . '/.git/refs');
@@ -88,7 +88,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testBranchAndCheckout(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
         file_put_contents($this->testDir . '/main.txt', 'main content');
 
         $add = new AddHandler($repo);
@@ -130,7 +130,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testCheckoutPreservesExecutablePermission(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
 
         // Create an executable script
         $scriptPath = $this->testDir . '/run.sh';
@@ -156,7 +156,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testTagOperations(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
         file_put_contents($this->testDir . '/file.txt', 'content');
 
         $add = new AddHandler($repo);
@@ -185,7 +185,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testResetModes(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
 
         file_put_contents($this->testDir . '/file.txt', 'version 1');
         $add = new AddHandler($repo);
@@ -211,7 +211,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testRmHandler(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
         file_put_contents($this->testDir . '/delete-me.txt', 'to be deleted');
 
         $add = new AddHandler($repo);
@@ -233,7 +233,7 @@ final class FullWorkflowTest extends TestCase
 
     public function testSubdirectoryFiles(): void
     {
-        $repo = Repository::init($this->testDir);
+        $repo = $this->initRepoWithUser();
 
         mkdir($this->testDir . '/src/lib', 0o777, true);
         file_put_contents($this->testDir . '/src/app.php', '<?php echo "hi";');
@@ -286,6 +286,16 @@ final class FullWorkflowTest extends TestCase
         self::assertArrayHasKey('.gitignore', $result['staged']);
         self::assertArrayNotHasKey('debug.log', $result['staged']);
         self::assertArrayNotHasKey('build/output.js', $result['staged']);
+    }
+
+    private function initRepoWithUser(): Repository
+    {
+        $repo = Repository::init($this->testDir);
+        $configPath = $repo->gitDir . '/config';
+        $config = file_exists($configPath) ? file_get_contents($configPath) : '';
+        file_put_contents($configPath, $config . "\n[user]\n\tname = Test User\n\temail = test@test.com\n");
+
+        return $repo;
     }
 
     private function removeDir(string $dir): void

@@ -23,7 +23,7 @@ final class CheckoutCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'checkout <branch|commit>';
+        return 'checkout [-b <new-branch>] <branch|commit>';
     }
 
     /**
@@ -46,6 +46,21 @@ final class CheckoutCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new CheckoutHandler($repo);
+
+        if ($args[0] === '-b') {
+            if (! isset($args[1])) {
+                fwrite(STDERR, "error: switch 'b' requires a value\n");
+
+                return 1;
+            }
+
+            $startPoint = $args[2] ?? null;
+            $result = $handler->checkoutNewBranch($args[1], $startPoint);
+            $this->printResult($result, $args[1], $repo);
+
+            return 0;
+        }
+
         $result = $handler->checkout($args[0]);
 
         $this->printResult($result, $args[0], $repo);
@@ -59,6 +74,7 @@ final class CheckoutCommand implements CliCommand
             CheckoutResult::AlreadyOnBranch => fwrite(STDOUT, sprintf("Already on '%s'\n", $target)),
             CheckoutResult::SwitchedToBranch => fwrite(STDOUT, sprintf("Switched to branch '%s'\n", $target)),
             CheckoutResult::DetachedHead => fwrite(STDOUT, sprintf("HEAD is now at %s\n", substr($target, 0, 7))),
+            CheckoutResult::CreatedAndSwitched => fwrite(STDOUT, sprintf("Switched to a new branch '%s'\n", $target)),
         };
 
         $this->printTrackingInfo($repo);

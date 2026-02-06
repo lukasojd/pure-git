@@ -81,6 +81,7 @@ abstract class AcceptanceTestCase extends TestCase
         // Add branch tracking config
         $config = file_get_contents($configPath);
         $config .= "\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n";
+        $config .= "\n[user]\n\tname = PureGit Test\n\temail = test@puregit.local\n";
         file_put_contents($configPath, $config);
 
         return Repository::open($tempDir);

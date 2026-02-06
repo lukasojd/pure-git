@@ -59,6 +59,10 @@ final class CliTest extends TestCase
         $exit = $this->runCapture($app, ['puregit', 'init']);
         self::assertSame(0, $exit);
 
+        // Set user identity
+        $configPath = $this->testDir . '/.git/config';
+        file_put_contents($configPath, file_get_contents($configPath) . "\n[user]\n\tname = PureGit User\n\temail = user@puregit.local\n");
+
         // Create file
         file_put_contents($this->testDir . '/test.txt', 'CLI test');
 

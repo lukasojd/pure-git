@@ -74,6 +74,45 @@ final readonly class CheckoutHandler
         }
     }
 
+    public function checkoutNewBranch(string $name, ?string $startPoint = null): CheckoutResult
+    {
+        $branchRef = RefName::branch($name);
+
+        if ($this->repository->refs->exists($branchRef)) {
+            throw new PureGitException(sprintf('A branch named \'%s\' already exists', $name));
+        }
+
+        $commitId = $this->resolveStartPoint($startPoint);
+        $this->repository->refs->updateRef($branchRef, $commitId);
+        $this->updateWorkingTree($commitId);
+        $this->repository->refs->updateSymbolicRef(RefName::head(), $branchRef);
+
+        return CheckoutResult::CreatedAndSwitched;
+    }
+
+    private function resolveStartPoint(?string $startPoint): ObjectId
+    {
+        if ($startPoint === null) {
+            return $this->repository->refs->resolve(RefName::head());
+        }
+
+        $branchRef = RefName::branch($startPoint);
+        if ($this->repository->refs->exists($branchRef)) {
+            return $this->repository->refs->resolve($branchRef);
+        }
+
+        try {
+            $commitId = ObjectId::fromHex($startPoint);
+            if ($this->repository->objects->exists($commitId)) {
+                return $commitId;
+            }
+        } catch (\Throwable) {
+            // Not a valid hash
+        }
+
+        throw new PureGitException(sprintf('Not a valid start point: %s', $startPoint));
+    }
+
     private function checkoutBranch(RefName $branchRef): CheckoutResult
     {
         $currentBranch = $this->repository->refs->getSymbolicRef(RefName::head());

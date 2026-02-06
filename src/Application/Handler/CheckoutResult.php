@@ -9,4 +9,5 @@ enum CheckoutResult
     case SwitchedToBranch;
     case AlreadyOnBranch;
     case DetachedHead;
+    case CreatedAndSwitched;
 }

@@ -31,15 +31,11 @@ final readonly class CommitHandler
             throw new PureGitException('Nothing to commit');
         }
 
-        $now = new DateTimeImmutable();
-        $defaultPerson = new PersonInfo(
-            $this->getConfigValue('user.name', 'PureGit User'),
-            $this->getConfigValue('user.email', 'user@puregit.local'),
-            $now,
-        );
-
-        $author ??= $defaultPerson;
-        $committer ??= $defaultPerson;
+        if (! $author instanceof \Lukasojd\PureGit\Domain\Object\PersonInfo || ! $committer instanceof \Lukasojd\PureGit\Domain\Object\PersonInfo) {
+            $defaultPerson = $this->resolveIdentity();
+            $author ??= $defaultPerson;
+            $committer ??= $defaultPerson;
+        }
 
         $treeId = $this->buildTree($index);
 
@@ -131,41 +127,68 @@ final readonly class CommitHandler
         return $tree->getId();
     }
 
-    private function getConfigValue(string $key, string $default): string
+    private function resolveIdentity(): PersonInfo
     {
-        $content = $this->readConfigFile();
-        if ($content === null) {
-            return $default;
+        $name = $this->getConfigValue('user.name');
+        $email = $this->getConfigValue('user.email');
+
+        if ($name === null || $email === null) {
+            throw new PureGitException(
+                "Author identity unknown.\n\n"
+                . "Run\n\n"
+                . "  git config --global user.email \"you@example.com\"\n"
+                . "  git config --global user.name \"Your Name\"\n\n"
+                . 'to set your account\'s default identity.',
+            );
         }
 
-        return $this->findConfigProperty($content, $key, $default);
+        return new PersonInfo($name, $email, new DateTimeImmutable());
     }
 
-    private function readConfigFile(): ?string
+    private function getConfigValue(string $key): ?string
     {
-        $configPath = $this->repository->gitDir . '/config';
+        // Local .git/config takes precedence
+        $value = $this->readFromConfigFile($this->repository->gitDir . '/config', $key);
+        if ($value !== null) {
+            return $value;
+        }
+
+        // Fall back to ~/.gitconfig
+        $home = getenv('HOME');
+        if ($home !== false) {
+            return $this->readFromConfigFile($home . '/.gitconfig', $key);
+        }
+
+        return null;
+    }
+
+    private function readFromConfigFile(string $configPath, string $key): ?string
+    {
         if (! file_exists($configPath)) {
             return null;
         }
 
         $content = file_get_contents($configPath);
+        if ($content === false) {
+            return null;
+        }
 
-        return $content !== false ? $content : null;
+        return $this->findConfigProperty($content, $key);
     }
 
-    private function findConfigProperty(string $content, string $key, string $default): string
+    private function findConfigProperty(string $content, string $key): ?string
     {
         $parts = explode('.', $key, 2);
         if (count($parts) !== 2) {
-            return $default;
+            return null;
         }
 
         [$section, $property] = $parts;
 
-        return $this->searchSectionForProperty($content, $section, $property, $default);
+        return $this->searchSectionForProperty($content, $section, $property);
     }
 
-    private function searchSectionForProperty(string $content, string $section, string $property, string $default): string
+    private function searchSectionForProperty(string $content, string $section, string $property): ?string
     {
         $inSection = false;
 
@@ -186,6 +209,6 @@ final readonly class CommitHandler
             }
         }
 
-        return $default;
+        return null;
     }
 }
