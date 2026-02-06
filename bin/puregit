@@ -1,0 +1,28 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+(static function (): void {
+    $autoloadPaths = [
+        __DIR__ . '/../vendor/autoload.php',
+        __DIR__ . '/../../../autoload.php',
+    ];
+
+    $autoloaded = false;
+    foreach ($autoloadPaths as $autoload) {
+        if (file_exists($autoload)) {
+            require $autoload;
+            $autoloaded = true;
+            break;
+        }
+    }
+
+    if (!$autoloaded) {
+        fwrite(STDERR, "Cannot find autoloader. Run 'composer install' first.\n");
+        exit(1);
+    }
+
+    $app = new \Lukasojd\PureGit\CLI\Application();
+    exit($app->run($argv));
+})();
