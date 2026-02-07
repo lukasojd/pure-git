@@ -6,7 +6,6 @@ namespace Lukasojd\PureGit\Tests\Functional;
 
 use Lukasojd\PureGit\Application\Handler\AddHandler;
 use Lukasojd\PureGit\Application\Handler\CheckoutHandler;
-use Lukasojd\PureGit\Application\Handler\CheckoutResult;
 use Lukasojd\PureGit\Application\Handler\CommitHandler;
 use Lukasojd\PureGit\Application\Handler\DiffHandler;
 use Lukasojd\PureGit\Application\Handler\MergeHandler;
@@ -49,7 +48,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testDiffAddedFileProducesHunks(): void
     {
-        $repo = $this->createRepoWithCommit(['base.txt' => 'base']);
+        $repo = $this->createRepoWithCommit([
+            'base.txt' => 'base',
+        ]);
         $firstId = $repo->refs->resolve(RefName::head());
 
         file_put_contents($repo->workDir . '/new.txt', "line1\nline2\n");
@@ -99,7 +100,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testDiffModifiedFileCarriesObjectIds(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => "old\n"]);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "old\n",
+        ]);
         $firstId = $repo->refs->resolve(RefName::head());
 
         file_put_contents($repo->workDir . '/file.txt', "new\n");
@@ -183,7 +186,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testShowHandlerResolvesTagName(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'content']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
         $headId = $repo->refs->resolve(RefName::head());
 
         // Create a lightweight tag
@@ -202,7 +207,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testShowHandlerResolvesShortHash(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'content']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
         $headId = $repo->refs->resolve(RefName::head());
 
         $handler = new ShowHandler($repo);
@@ -218,7 +225,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testShowHandlerPeelsAnnotatedTag(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'content']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
         $headId = $repo->refs->resolve(RefName::head());
 
         // Create annotated tag object
@@ -245,7 +254,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testMergeFastForwardReturnsMergeResult(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'initial']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'initial',
+        ]);
         $mainId = $repo->refs->resolve(RefName::head());
 
         // Create feature branch at same point
@@ -273,12 +284,14 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testResetSoftDoesNotChangeWorkingTree(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'v1']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'v1',
+        ]);
         $firstId = $repo->refs->resolve(RefName::head());
 
         file_put_contents($repo->workDir . '/file.txt', 'v2');
         $this->commitFiles($repo, ['file.txt'], 'v2');
-        $secondId = $repo->refs->resolve(RefName::head());
+        $repo->refs->resolve(RefName::head());
 
         $handler = new ResetHandler($repo);
         $handler->handle($firstId->hash, ResetMode::Soft);
@@ -296,7 +309,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testDiffNoPhantomLineFromTrailingNewline(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => "line1\n"]);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "line1\n",
+        ]);
         $firstId = $repo->refs->resolve(RefName::head());
 
         file_put_contents($repo->workDir . '/file.txt', "line1\nline2\n");
@@ -322,7 +337,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testStatusWithUnstagedChanges(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => 'original']);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'original',
+        ]);
 
         // Modify without staging
         file_put_contents($repo->workDir . '/file.txt', 'modified');
@@ -340,7 +357,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testDiffIndexVsHeadAddedFile(): void
     {
-        $repo = $this->createRepoWithCommit(['existing.txt' => 'content']);
+        $repo = $this->createRepoWithCommit([
+            'existing.txt' => 'content',
+        ]);
 
         // Add new file to index
         file_put_contents($repo->workDir . '/staged.txt', "new content\n");
@@ -361,7 +380,9 @@ final class OutputCompatibilityTest extends TestCase
      */
     public function testDiffIndexVsHeadDeletedFile(): void
     {
-        $repo = $this->createRepoWithCommit(['file.txt' => "content\n"]);
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
 
         // Remove from index
         $rm = new \Lukasojd\PureGit\Application\Handler\RmHandler($repo);

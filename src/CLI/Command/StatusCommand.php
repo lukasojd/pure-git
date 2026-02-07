@@ -9,13 +9,21 @@ use Lukasojd\PureGit\Application\Handler\StatusHandler;
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Diff\FileStatus;
 
-final class StatusCommand implements CliCommand
+final readonly class StatusCommand implements CliCommand
 {
-    private const string GREEN = "\033[32m";
+    private string $green;
 
-    private const string RED = "\033[31m";
+    private string $red;
 
-    private const string RESET = "\033[0m";
+    private string $reset;
+
+    public function __construct()
+    {
+        $useColor = stream_isatty(STDOUT);
+        $this->green = $useColor ? "\033[32m" : '';
+        $this->red = $useColor ? "\033[31m" : '';
+        $this->reset = $useColor ? "\033[0m" : '';
+    }
 
     public function name(): string
     {
@@ -92,7 +100,7 @@ final class StatusCommand implements CliCommand
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", self::GREEN, $label, $path, self::RESET));
+            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", $this->green, $label, $path, $this->reset));
         }
         fwrite(STDOUT, "\n");
     }
@@ -115,7 +123,7 @@ final class StatusCommand implements CliCommand
                 FileStatus::Deleted => 'deleted',
                 default => $status->value,
             };
-            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", self::RED, $label, $path, self::RESET));
+            fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", $this->red, $label, $path, $this->reset));
         }
         fwrite(STDOUT, "\n");
     }
@@ -146,7 +154,7 @@ final class StatusCommand implements CliCommand
         fwrite(STDOUT, "Untracked files:\n");
         fwrite(STDOUT, "  (use \"git add <file>...\" to include in what will be committed)\n");
         foreach ($untracked as $path) {
-            fwrite(STDOUT, sprintf("\t%s%s%s\n", self::RED, $path, self::RESET));
+            fwrite(STDOUT, sprintf("\t%s%s%s\n", $this->red, $path, $this->reset));
         }
         fwrite(STDOUT, "\n");
     }

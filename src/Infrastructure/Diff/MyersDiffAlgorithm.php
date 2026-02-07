@@ -174,9 +174,9 @@ final class MyersDiffAlgorithm implements DiffAlgorithm
         }
 
         return new DiffHunk(
-            oldStart: $oldStart ?? 1,
+            oldStart: $oldStart ?? 0,
             oldCount: $oldCount,
-            newStart: $newStart ?? 1,
+            newStart: $newStart ?? 0,
             newCount: $newCount,
             lines: $lines,
         );
@@ -197,12 +197,12 @@ final class MyersDiffAlgorithm implements DiffAlgorithm
             DiffLineType::Added => (function () use (&$newCount, $edit, &$oldStart, &$newStart): void {
                 $newCount++;
                 $newStart ??= $edit['newLine'];
-                $oldStart ??= ($edit['oldLine'] ?? 1);
+                $oldStart ??= ($edit['oldLine'] ?? 0);
             })(),
             DiffLineType::Removed => (function () use (&$oldCount, $edit, &$oldStart, &$newStart): void {
                 $oldCount++;
                 $oldStart ??= $edit['oldLine'];
-                $newStart ??= ($edit['newLine'] ?? 1);
+                $newStart ??= ($edit['newLine'] ?? 0);
             })(),
         };
     }

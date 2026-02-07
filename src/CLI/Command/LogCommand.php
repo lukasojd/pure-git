@@ -50,11 +50,16 @@ final class LogCommand implements CliCommand
         $handler = new LogHandler($repo);
         $commits = $handler->handle($maxCount);
 
+        $isFirst = true;
         foreach ($commits as $commit) {
+            if (! $isFirst) {
+                fwrite(STDOUT, "\n");
+            }
             fwrite(STDOUT, sprintf("commit %s\n", $commit->getId()->hash));
             fwrite(STDOUT, sprintf("Author: %s <%s>\n", $commit->author->name, $commit->author->email));
             fwrite(STDOUT, sprintf("Date:   %s\n", $commit->author->timestamp->format('D M j H:i:s Y O')));
-            fwrite(STDOUT, sprintf("\n    %s\n\n", $commit->message));
+            fwrite(STDOUT, sprintf("\n    %s\n", $commit->message));
+            $isFirst = false;
         }
 
         return 0;
