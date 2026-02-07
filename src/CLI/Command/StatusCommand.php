@@ -53,9 +53,7 @@ final class StatusCommand implements CliCommand
         $this->printUnstagedChanges($result['unstaged']);
         $this->printUntrackedFiles($result['untracked']);
 
-        if ($result['staged'] === [] && $result['unstaged'] === [] && $result['untracked'] === []) {
-            fwrite(STDOUT, "nothing to commit, working tree clean\n");
-        }
+        $this->printFooter($result);
 
         return 0;
     }
@@ -120,6 +118,20 @@ final class StatusCommand implements CliCommand
             fwrite(STDOUT, sprintf("\t%s%s:   %s%s\n", self::RED, $label, $path, self::RESET));
         }
         fwrite(STDOUT, "\n");
+    }
+
+    /**
+     * @param array{staged: array<string, FileStatus>, unstaged: array<string, FileStatus>, untracked: list<string>} $result
+     */
+    private function printFooter(array $result): void
+    {
+        if ($result['staged'] === [] && $result['unstaged'] === [] && $result['untracked'] === []) {
+            fwrite(STDOUT, "nothing to commit, working tree clean\n");
+        } elseif ($result['staged'] === [] && $result['unstaged'] !== []) {
+            fwrite(STDOUT, "no changes added to commit (use \"git add\" and/or \"git commit -a\")\n");
+        } elseif ($result['staged'] === [] && $result['unstaged'] === [] && $result['untracked'] !== []) {
+            fwrite(STDOUT, "nothing added to commit but untracked files present (use \"git add\" to track)\n");
+        }
     }
 
     /**

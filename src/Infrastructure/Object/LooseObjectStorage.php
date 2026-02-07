@@ -117,6 +117,34 @@ final readonly class LooseObjectStorage implements ObjectStorageInterface
         return new RawObject($type, $size, $body);
     }
 
+    public function findByPrefix(string $hexPrefix): ?ObjectId
+    {
+        if (strlen($hexPrefix) < 4) {
+            return null;
+        }
+
+        $dir = $this->objectsDir . '/' . substr($hexPrefix, 0, 2);
+        if (! is_dir($dir)) {
+            return null;
+        }
+
+        $suffix = substr($hexPrefix, 2);
+        $matches = [];
+        $files = scandir($dir);
+        if ($files === false) {
+            return null;
+        }
+
+        /** @var string $file */
+        foreach ($files as $file) {
+            if (str_starts_with($file, $suffix)) {
+                $matches[] = ObjectId::fromHex(substr($hexPrefix, 0, 2) . $file);
+            }
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
     public static function deserialize(RawObject $raw): GitObject
     {
         return match ($raw->type) {

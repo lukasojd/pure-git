@@ -20,6 +20,9 @@
         <testsuite name="E2E">
             <directory>tests/E2E</directory>
         </testsuite>
+        <testsuite name="Functional">
+            <directory>tests/Functional</directory>
+        </testsuite>
         <testsuite name="Acceptance">
             <directory>tests/Acceptance</directory>
         </testsuite>

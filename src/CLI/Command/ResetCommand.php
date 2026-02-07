@@ -43,13 +43,15 @@ final class ResetCommand implements CliCommand
         $handler = new ResetHandler($repo);
         $handler->handle($target, $mode);
 
-        $headId = $repo->refs->resolve(\Lukasojd\PureGit\Domain\Ref\RefName::head());
-        $commit = $repo->objects->read($headId);
-        $message = $commit instanceof \Lukasojd\PureGit\Domain\Object\Commit
-            ? ' ' . strtok($commit->message, "\n")
-            : '';
+        if ($mode === ResetMode::Hard) {
+            $headId = $repo->refs->resolve(\Lukasojd\PureGit\Domain\Ref\RefName::head());
+            $commit = $repo->objects->read($headId);
+            $message = $commit instanceof \Lukasojd\PureGit\Domain\Object\Commit
+                ? ' ' . strtok($commit->message, "\n")
+                : '';
 
-        fwrite(STDOUT, sprintf("HEAD is now at %s%s\n", $headId->short(), $message));
+            fwrite(STDOUT, sprintf("HEAD is now at %s%s\n", $headId->short(), $message));
+        }
 
         return 0;
     }

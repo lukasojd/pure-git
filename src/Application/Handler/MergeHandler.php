@@ -26,7 +26,7 @@ final readonly class MergeHandler
     ) {
     }
 
-    public function handle(string $branchName): ObjectId
+    public function handle(string $branchName): MergeResult
     {
         $theirsRef = RefName::branch($branchName);
         $theirsId = $this->repository->refs->resolve($theirsRef);
@@ -39,10 +39,10 @@ final readonly class MergeHandler
         $theirsId = $this->repository->refs->resolve(RefName::fromString($refPath));
         $label = str_starts_with($refPath, 'refs/remotes/') ? substr($refPath, 13) : $refPath;
 
-        return $this->doMerge($theirsId, $label);
+        return $this->doMerge($theirsId, $label)->commitId;
     }
 
-    private function doMerge(ObjectId $theirsId, string $label): ObjectId
+    private function doMerge(ObjectId $theirsId, string $label): MergeResult
     {
         $oursId = $this->repository->refs->resolve(RefName::head());
 
@@ -54,10 +54,14 @@ final readonly class MergeHandler
         $baseId = $resolver->findMergeBase($oursId, $theirsId);
 
         if ($baseId instanceof ObjectId && $baseId->equals($oursId)) {
-            return $this->fastForward($theirsId);
+            $commitId = $this->fastForward($theirsId);
+
+            return new MergeResult(commitId: $commitId, fastForward: true, oldId: $oursId);
         }
 
-        return $this->threeWayMerge($oursId, $theirsId, $baseId, $label);
+        $commitId = $this->threeWayMerge($oursId, $theirsId, $baseId, $label);
+
+        return new MergeResult(commitId: $commitId, fastForward: false, oldId: $oursId);
     }
 
     private function fastForward(ObjectId $targetId): ObjectId

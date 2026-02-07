@@ -34,7 +34,11 @@ final readonly class DiffHandler
             $fullPath = $this->repository->workDir . '/' . $path;
 
             if (! file_exists($fullPath)) {
-                $diffs[] = new FileDiff($path, FileStatus::Deleted, []);
+                $diff = $this->diffDeletedFile($path, $entry->objectId);
+                if ($diff instanceof FileDiff) {
+                    $diffs[] = $diff;
+                }
+
                 continue;
             }
 
@@ -52,8 +56,9 @@ final readonly class DiffHandler
             $oldLines = $this->splitLines($indexBlob->content);
             $newLines = $this->splitLines($workingContent);
             $hunks = $this->diffAlgorithm->diff($oldLines, $newLines);
+            $newBlob = new Blob($workingContent);
 
-            $diffs[] = new FileDiff($path, FileStatus::Modified, $hunks);
+            $diffs[] = new FileDiff($path, FileStatus::Modified, $hunks, $entry->objectId, $newBlob->getId());
         }
 
         return $diffs;
@@ -69,33 +74,27 @@ final readonly class DiffHandler
         $diffs = [];
 
         foreach ($index->getEntries() as $path => $entry) {
-            if (! isset($headEntries[$path])) {
-                $diffs[] = new FileDiff($path, FileStatus::Added, []);
-                continue;
+            $diff = $this->diffIndexEntryVsHead($path, $entry->objectId, $headEntries[$path] ?? null);
+            if ($diff instanceof FileDiff) {
+                $diffs[] = $diff;
             }
-
-            if ($entry->objectId->equals($headEntries[$path])) {
-                continue;
-            }
-
-            $headBlob = $this->repository->objects->read($headEntries[$path]);
-            $indexBlob = $this->repository->objects->read($entry->objectId);
-
-            if (! $headBlob instanceof Blob || ! $indexBlob instanceof Blob) {
-                continue;
-            }
-
-            $oldLines = $this->splitLines($headBlob->content);
-            $newLines = $this->splitLines($indexBlob->content);
-            $hunks = $this->diffAlgorithm->diff($oldLines, $newLines);
-
-            $diffs[] = new FileDiff($path, FileStatus::Modified, $hunks);
         }
 
-        // Deleted from HEAD
-        foreach (array_keys($headEntries) as $path) {
-            if (! $index->hasEntry($path)) {
-                $diffs[] = new FileDiff($path, FileStatus::Deleted, []);
+        return array_merge($diffs, $this->findDeletedFromHead($index, $headEntries));
+    }
+
+    /**
+     * @return list<FileDiff>
+     */
+    public function diffRootCommit(ObjectId $commitId): array
+    {
+        $entries = $this->collectCommitEntries($commitId);
+        $diffs = [];
+
+        foreach ($entries as $path => $objectId) {
+            $diff = $this->diffAddedFile($path, $objectId);
+            if ($diff instanceof FileDiff) {
+                $diffs[] = $diff;
             }
         }
 
@@ -124,6 +123,39 @@ final readonly class DiffHandler
         return $diffs;
     }
 
+    /**
+     * @param array<string, ObjectId> $headEntries
+     * @return list<FileDiff>
+     */
+    private function findDeletedFromHead(\Lukasojd\PureGit\Domain\Index\Index $index, array $headEntries): array
+    {
+        $diffs = [];
+
+        foreach ($headEntries as $path => $objectId) {
+            if (! $index->hasEntry($path)) {
+                $diff = $this->diffDeletedFile($path, $objectId);
+                if ($diff instanceof FileDiff) {
+                    $diffs[] = $diff;
+                }
+            }
+        }
+
+        return $diffs;
+    }
+
+    private function diffIndexEntryVsHead(string $path, ObjectId $indexObjectId, ?ObjectId $headObjectId): ?FileDiff
+    {
+        if (! $headObjectId instanceof ObjectId) {
+            return $this->diffAddedFile($path, $indexObjectId);
+        }
+
+        if ($indexObjectId->equals($headObjectId)) {
+            return null;
+        }
+
+        return $this->diffModifiedFile($path, $headObjectId, $indexObjectId);
+    }
+
     private function diffPath(string $path, ?ObjectId $oldId, ?ObjectId $newId): ?FileDiff
     {
         if (! $oldId instanceof \Lukasojd\PureGit\Domain\Object\ObjectId && $newId instanceof ObjectId) {
@@ -150,7 +182,7 @@ final readonly class DiffHandler
 
         $hunks = $this->diffAlgorithm->diff([], $this->splitLines($blob->content));
 
-        return new FileDiff($path, FileStatus::Added, $hunks);
+        return new FileDiff($path, FileStatus::Added, $hunks, newId: $newId);
     }
 
     private function diffDeletedFile(string $path, ObjectId $oldId): ?FileDiff
@@ -162,7 +194,7 @@ final readonly class DiffHandler
 
         $hunks = $this->diffAlgorithm->diff($this->splitLines($blob->content), []);
 
-        return new FileDiff($path, FileStatus::Deleted, $hunks);
+        return new FileDiff($path, FileStatus::Deleted, $hunks, oldId: $oldId);
     }
 
     private function diffModifiedFile(string $path, ObjectId $oldId, ObjectId $newId): ?FileDiff
@@ -179,7 +211,7 @@ final readonly class DiffHandler
             $this->splitLines($newBlob->content),
         );
 
-        return new FileDiff($path, FileStatus::Modified, $hunks);
+        return new FileDiff($path, FileStatus::Modified, $hunks, $oldId, $newId);
     }
 
     /**
@@ -245,6 +277,11 @@ final readonly class DiffHandler
     {
         if ($content === '') {
             return [];
+        }
+
+        // Remove trailing newline to avoid phantom empty line
+        if (str_ends_with($content, "\n")) {
+            $content = substr($content, 0, -1);
         }
 
         return explode("\n", $content);

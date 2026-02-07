@@ -53,7 +53,7 @@ final class LogCommand implements CliCommand
         foreach ($commits as $commit) {
             fwrite(STDOUT, sprintf("commit %s\n", $commit->getId()->hash));
             fwrite(STDOUT, sprintf("Author: %s <%s>\n", $commit->author->name, $commit->author->email));
-            fwrite(STDOUT, sprintf("Date:   %s\n", $commit->author->timestamp->format('Y-m-d H:i:s O')));
+            fwrite(STDOUT, sprintf("Date:   %s\n", $commit->author->timestamp->format('D M j H:i:s Y O')));
             fwrite(STDOUT, sprintf("\n    %s\n\n", $commit->message));
         }
 

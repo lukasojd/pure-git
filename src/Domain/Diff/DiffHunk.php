@@ -20,6 +20,9 @@ final readonly class DiffHunk
 
     public function header(): string
     {
-        return sprintf('@@ -%d,%d +%d,%d @@', $this->oldStart, $this->oldCount, $this->newStart, $this->newCount);
+        $old = $this->oldCount === 1 ? (string) $this->oldStart : sprintf('%d,%d', $this->oldStart, $this->oldCount);
+        $new = $this->newCount === 1 ? (string) $this->newStart : sprintf('%d,%d', $this->newStart, $this->newCount);
+
+        return sprintf('@@ -%s +%s @@', $old, $new);
     }
 }

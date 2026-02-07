@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\Domain\Diff;
 
+use Lukasojd\PureGit\Domain\Object\ObjectId;
+
 final readonly class FileDiff
 {
     /**
@@ -13,6 +15,8 @@ final readonly class FileDiff
         public string $path,
         public FileStatus $status,
         public array $hunks,
+        public ?ObjectId $oldId = null,
+        public ?ObjectId $newId = null,
     ) {
     }
 

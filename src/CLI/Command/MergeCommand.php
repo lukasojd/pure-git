@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\CLI\Command;
 
+use Lukasojd\PureGit\Application\Handler\DiffHandler;
 use Lukasojd\PureGit\Application\Handler\MergeHandler;
+use Lukasojd\PureGit\Application\Handler\MergeResult;
 use Lukasojd\PureGit\Application\Service\Repository;
+use Lukasojd\PureGit\CLI\Formatter\DiffStatFormatter;
 use Lukasojd\PureGit\Domain\Exception\MergeConflictException;
+use Lukasojd\PureGit\Infrastructure\Diff\MyersDiffAlgorithm;
 
 final class MergeCommand implements CliCommand
 {
@@ -46,20 +50,39 @@ final class MergeCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new MergeHandler($repo);
 
-        return $this->performMerge($handler, $args[0]);
+        return $this->performMerge($handler, $repo, $args[0]);
     }
 
-    private function performMerge(MergeHandler $handler, string $branchName): int
+    private function performMerge(MergeHandler $handler, Repository $repo, string $branchName): int
     {
         try {
-            $commitId = $handler->handle($branchName);
-            fwrite(STDOUT, sprintf("Merge made with commit %s\n", $commitId->short()));
+            $result = $handler->handle($branchName);
+
+            if ($result->fastForward) {
+                $this->printFastForward($result, $repo);
+            } else {
+                fwrite(STDOUT, sprintf("Merge made with commit %s\n", $result->commitId->short()));
+            }
 
             return 0;
         } catch (MergeConflictException $e) {
             $this->printConflicts($e);
 
             return 1;
+        }
+    }
+
+    private function printFastForward(MergeResult $result, Repository $repo): void
+    {
+        fwrite(STDOUT, sprintf("Updating %s..%s\n", $result->oldId->short(), $result->commitId->short()));
+        fwrite(STDOUT, "Fast-forward\n");
+
+        $diffHandler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $diffHandler->diffCommits($result->oldId, $result->commitId);
+        $stat = DiffStatFormatter::format($diffs);
+
+        if ($stat !== '') {
+            fwrite(STDOUT, $stat . "\n");
         }
     }
 

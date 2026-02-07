@@ -29,4 +29,9 @@ interface ObjectStorageInterface
      * @param string $binHash 20-byte raw hash
      */
     public function readRawHeaderByBinary(string $binHash): RawObject;
+
+    /**
+     * Find an object by abbreviated hex prefix. Returns null if no match or ambiguous.
+     */
+    public function findByPrefix(string $hexPrefix): ?ObjectId;
 }

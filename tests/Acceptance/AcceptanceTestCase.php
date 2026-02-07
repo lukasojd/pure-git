@@ -89,6 +89,14 @@ abstract class AcceptanceTestCase extends TestCase
 
     protected function addFileAndCommit(Repository $repo, string $filename, string $content, string $message): void
     {
+        // Write file to working directory
+        $fullPath = $repo->workDir . '/' . $filename;
+        $dir = dirname($fullPath);
+        if (! is_dir($dir)) {
+            mkdir($dir, 0o777, true);
+        }
+        file_put_contents($fullPath, $content);
+
         $blob = new Blob($content);
         $repo->objects->write($blob);
 
