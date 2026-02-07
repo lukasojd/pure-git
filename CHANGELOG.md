@@ -42,6 +42,14 @@
 - `branch -a` — list local and remote-tracking branches
 - `branch --set-upstream-to=<upstream>` — configure upstream tracking
 - `checkout -- <file>` — restore file from HEAD (single file or multiple)
+- `log --author=<pattern>` — filter commits by author name or email substring
+- `log --since=<date>` — show only commits after the given date
+- `commit -a` — auto-stage tracked modified/deleted files before committing
+- `commit --amend` — replace the last commit (reuses parent chain)
+- `commit --allow-empty` — allow creating commits with no changes
+- `add -u` — update index for tracked files only (stage modifications and deletions, skip untracked)
+- `clone -b`/`--branch=<name>` — checkout specific branch after clone
+- Core/Extended feature tables in README
 
 ### Fixed
 - Push crashes when remote has branches not fetched locally ("Object not found")

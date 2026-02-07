@@ -22,7 +22,7 @@ final class AddCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'add <pathspec>...';
+        return 'add [-u] <pathspec>...';
     }
 
     /**
@@ -45,6 +45,13 @@ final class AddCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new AddHandler($repo);
+
+        if (in_array('-u', $args, true)) {
+            $handler->updateTracked();
+
+            return 0;
+        }
+
         $paths = $this->resolvePaths($args, $repo);
         $handler->handle($paths);
 

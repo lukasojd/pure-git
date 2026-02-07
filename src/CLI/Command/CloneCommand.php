@@ -23,7 +23,7 @@ final class CloneCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'clone [--bare] <url> [<directory>]';
+        return 'clone [--bare] [-b|--branch=<name>] <url> [<directory>]';
     }
 
     /**
@@ -31,28 +31,28 @@ final class CloneCommand implements CliCommand
      */
     public function execute(array $args): int
     {
-        $parsed = $this->parseArgs($args);
+        $parsed = $this->parseArgs($this->normalizeBranchFlag($args));
         if ($parsed === null) {
             fwrite(STDERR, "fatal: You must specify a repository to clone.\n");
 
             return 128;
         }
 
-        [$url, $targetDir, $bare] = $parsed;
+        [$url, $targetDir, $bare, $branch] = $parsed;
 
         fwrite(STDERR, sprintf("Cloning into '%s'...\n", $targetDir));
 
         $transport = TransportFactory::create($url);
 
         $gitDir = $bare ? $targetDir : $targetDir . '/.git';
-        $this->performClone($transport, $gitDir);
+        $this->performClone($transport, $gitDir, $branch);
 
         fwrite(STDERR, "done.\n");
 
         return 0;
     }
 
-    private function performClone(TransportInterface $transport, string $gitDir): void
+    private function performClone(TransportInterface $transport, string $gitDir, ?string $branch): void
     {
         $refs = $transport->listRefs();
         $wants = $this->collectWants($refs);
@@ -64,21 +64,48 @@ final class CloneCommand implements CliCommand
         }
 
         $this->writeRefs($refs, $gitDir);
-        $this->writeHead($this->determineHead($refs), $gitDir);
+        $headTarget = $branch !== null ? 'refs/heads/' . $branch : $this->determineHead($refs);
+        $this->writeHead($headTarget, $gitDir);
+    }
+
+    /**
+     * Normalize -b <name> and --branch <name> to --branch=<name>.
+     *
+     * @param list<string> $args
+     * @return list<string>
+     */
+    private function normalizeBranchFlag(array $args): array
+    {
+        $result = [];
+        $counter = count($args);
+
+        for ($i = 0; $i < $counter; $i++) {
+            if (($args[$i] === '-b' || $args[$i] === '--branch') && isset($args[$i + 1])) {
+                $result[] = '--branch=' . $args[$i + 1];
+                $i++;
+            } else {
+                $result[] = $args[$i];
+            }
+        }
+
+        return $result;
     }
 
     /**
      * @param list<string> $args
-     * @return array{string, string, bool}|null
+     * @return array{string, string, bool, ?string}|null
      */
     private function parseArgs(array $args): ?array
     {
         $bare = false;
+        $branch = null;
         $positional = [];
 
         foreach ($args as $arg) {
             if ($arg === '--bare') {
                 $bare = true;
+            } elseif (str_starts_with($arg, '--branch=')) {
+                $branch = substr($arg, 9);
             } else {
                 $positional[] = $arg;
             }
@@ -91,7 +118,7 @@ final class CloneCommand implements CliCommand
         $url = $positional[0];
         $targetDir = $positional[1] ?? $this->deriveTargetDir($url);
 
-        return [$url, $targetDir, $bare];
+        return [$url, $targetDir, $bare, $branch];
     }
 
     private function deriveTargetDir(string $url): string

@@ -23,40 +23,28 @@ final readonly class CommitHandler
     ) {
     }
 
-    public function handle(string $message, ?PersonInfo $author = null, ?PersonInfo $committer = null): ObjectId
-    {
+    public function handle(
+        string $message,
+        ?PersonInfo $author = null,
+        ?PersonInfo $committer = null,
+        bool $allowEmpty = false,
+        bool $amend = false,
+    ): ObjectId {
         $index = $this->repository->index->read();
 
-        if ($index->count() === 0) {
+        if (! $allowEmpty && $index->count() === 0) {
             throw new PureGitException('Nothing to commit');
         }
 
         $identity = $author ?? $committer ?? $this->resolveIdentity();
-        $author = $identity;
-        $committer = $identity;
 
         $treeId = $this->buildTree($index);
+        $parents = $this->resolveParents($amend);
 
-        $parents = [];
-        $head = RefName::head();
-
-        try {
-            $parentId = $this->repository->refs->resolve($head);
-            $parents[] = $parentId;
-        } catch (\Throwable) {
-            // Initial commit — no parents
-        }
-
-        $commit = new Commit($treeId, $parents, $author, $committer, $message);
+        $commit = new Commit($treeId, $parents, $identity, $identity, $message);
         $this->repository->objects->write($commit);
 
-        // Update HEAD
-        $symbolicRef = $this->repository->refs->getSymbolicRef($head);
-        if ($symbolicRef instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
-            $this->repository->refs->updateRef($symbolicRef, $commit->getId());
-        } else {
-            $this->repository->refs->updateRef($head, $commit->getId());
-        }
+        $this->updateHead($commit->getId());
 
         return $commit->getId();
     }
@@ -84,6 +72,38 @@ final readonly class CommitHandler
         }
 
         return $this->writeTreeRecursive($root);
+    }
+
+    /**
+     * @return list<ObjectId>
+     */
+    private function resolveParents(bool $amend): array
+    {
+        try {
+            $parentId = $this->repository->refs->resolve(RefName::head());
+        } catch (\Throwable) {
+            return []; // Initial commit
+        }
+
+        if (! $amend) {
+            return [$parentId];
+        }
+
+        $parentCommit = $this->repository->objects->read($parentId);
+
+        return $parentCommit instanceof Commit ? $parentCommit->parents : [$parentId];
+    }
+
+    private function updateHead(ObjectId $commitId): void
+    {
+        $head = RefName::head();
+        $symbolicRef = $this->repository->refs->getSymbolicRef($head);
+
+        if ($symbolicRef instanceof \Lukasojd\PureGit\Domain\Ref\RefName) {
+            $this->repository->refs->updateRef($symbolicRef, $commitId);
+        } else {
+            $this->repository->refs->updateRef($head, $commitId);
+        }
     }
 
     /**

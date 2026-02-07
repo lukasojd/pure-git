@@ -17,6 +17,29 @@ final readonly class AddHandler
     ) {
     }
 
+    public function updateTracked(): void
+    {
+        $index = $this->repository->index->read();
+
+        foreach ($index->getEntries() as $path => $entry) {
+            $fullPath = $this->repository->workDir . '/' . $path;
+            if (! file_exists($fullPath)) {
+                $index->removeEntry($path);
+                continue;
+            }
+
+            $content = $this->repository->filesystem->read($fullPath);
+            $blob = new Blob($content);
+            if (! $blob->getId()->equals($entry->objectId)) {
+                $this->repository->objects->write($blob);
+                $newEntry = IndexEntry::create($path, $blob->getId(), $entry->mode, strlen($content));
+                $index->addEntry($newEntry);
+            }
+        }
+
+        $this->repository->index->write($index);
+    }
+
     /**
      * @param list<string> $paths relative paths to add
      */

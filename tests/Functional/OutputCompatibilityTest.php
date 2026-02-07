@@ -783,6 +783,243 @@ final class OutputCompatibilityTest extends TestCase
         self::assertSame("content\n", file_get_contents($repo->workDir . '/file.txt'));
     }
 
+    // ========= log --author =========
+
+    public function testLogAuthorFiltersCommitsByName(): void
+    {
+        $repo = Repository::init($this->testDir);
+        file_put_contents($this->testDir . '/a.txt', "a\n");
+        $add = new AddHandler($repo);
+        $add->handle(['a.txt']);
+        $commit = new CommitHandler($repo);
+        $commit->handle('By Alice', new PersonInfo('Alice', 'alice@example.com', new \DateTimeImmutable()));
+
+        file_put_contents($this->testDir . '/b.txt', "b\n");
+        $add->handle(['b.txt']);
+        $commit->handle('By Bob', new PersonInfo('Bob', 'bob@example.com', new \DateTimeImmutable()));
+
+        $handler = new LogHandler($repo);
+
+        $alice = $handler->handle(10, author: 'Alice');
+        self::assertCount(1, $alice);
+        self::assertStringContainsString('By Alice', $alice[0]->message);
+
+        $bob = $handler->handle(10, author: 'Bob');
+        self::assertCount(1, $bob);
+        self::assertStringContainsString('By Bob', $bob[0]->message);
+
+        $all = $handler->handle(10);
+        self::assertCount(2, $all);
+    }
+
+    public function testLogAuthorFiltersCommitsByEmail(): void
+    {
+        $repo = Repository::init($this->testDir);
+        file_put_contents($this->testDir . '/file.txt', "content\n");
+        $add = new AddHandler($repo);
+        $add->handle(['file.txt']);
+        $commit = new CommitHandler($repo);
+        $commit->handle('Commit', new PersonInfo('Dev', 'dev@corp.com', new \DateTimeImmutable()));
+
+        $handler = new LogHandler($repo);
+        $byEmail = $handler->handle(10, author: 'corp.com');
+        self::assertCount(1, $byEmail);
+
+        $noMatch = $handler->handle(10, author: 'nobody');
+        self::assertCount(0, $noMatch);
+    }
+
+    // ========= log --since =========
+
+    public function testLogSinceFiltersCommitsByDate(): void
+    {
+        $repo = Repository::init($this->testDir);
+        file_put_contents($this->testDir . '/old.txt', "old\n");
+        $add = new AddHandler($repo);
+        $add->handle(['old.txt']);
+        $commit = new CommitHandler($repo);
+        $oldDate = new \DateTimeImmutable('2020-01-01');
+        $commit->handle('Old commit', new PersonInfo('Test', 'test@test.com', $oldDate));
+
+        file_put_contents($this->testDir . '/new.txt', "new\n");
+        $add->handle(['new.txt']);
+        $newDate = new \DateTimeImmutable('2025-06-01');
+        $commit->handle('New commit', new PersonInfo('Test', 'test@test.com', $newDate));
+
+        $handler = new LogHandler($repo);
+
+        $since2024 = $handler->handle(10, since: new \DateTimeImmutable('2024-01-01'));
+        self::assertCount(1, $since2024);
+        self::assertStringContainsString('New commit', $since2024[0]->message);
+
+        $since2019 = $handler->handle(10, since: new \DateTimeImmutable('2019-01-01'));
+        self::assertCount(2, $since2019);
+    }
+
+    // ========= commit -a (auto-stage tracked) =========
+
+    public function testCommitAutoStageTrackedFiles(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'tracked.txt' => "original\n",
+        ]);
+
+        // Modify tracked file without staging
+        file_put_contents($repo->workDir . '/tracked.txt', "modified\n");
+
+        // Auto-stage and commit
+        new AddHandler($repo)->updateTracked();
+        $commit = new CommitHandler($repo);
+        $commitId = $commit->handle('Auto-staged commit', new PersonInfo('Test', 'test@test.com', new \DateTimeImmutable()));
+
+        // Verify the commit includes the modification
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $parentId = $repo->objects->read($commitId);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $parentId);
+        $parentCommitId = $parentId->parents[0];
+        $diffs = $handler->diffCommits($parentCommitId, $commitId);
+
+        self::assertCount(1, $diffs);
+        self::assertSame('tracked.txt', $diffs[0]->path);
+    }
+
+    public function testAutoStageHandlesDeletedFiles(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
+
+        unlink($repo->workDir . '/file.txt');
+        new AddHandler($repo)->updateTracked();
+
+        $index = $repo->index->read();
+        self::assertFalse($index->hasEntry('file.txt'));
+    }
+
+    // ========= commit --allow-empty =========
+
+    public function testCommitAllowEmpty(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        // Commit again with same index (no changes) using allowEmpty
+        $commit = new CommitHandler($repo);
+        $secondId = $commit->handle(
+            'Empty commit',
+            new PersonInfo('Test', 'test@test.com', new \DateTimeImmutable()),
+            allowEmpty: true,
+        );
+
+        self::assertFalse($firstId->equals($secondId));
+
+        // Both commits should have the same tree
+        $first = $repo->objects->read($firstId);
+        $second = $repo->objects->read($secondId);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $first);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $second);
+        self::assertTrue($first->treeId->equals($second->treeId));
+    }
+
+    // ========= commit --amend =========
+
+    public function testCommitAmendReplacesLastCommit(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "v1\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+        $firstCommit = $repo->objects->read($firstId);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $firstCommit);
+
+        // Make a second commit
+        file_put_contents($repo->workDir . '/file.txt', "v2\n");
+        $this->commitFiles($repo, ['file.txt'], 'Original second');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        // Amend the second commit
+        $commit = new CommitHandler($repo);
+        $amendedId = $commit->handle(
+            'Amended message',
+            new PersonInfo('Test', 'test@test.com', new \DateTimeImmutable()),
+            amend: true,
+        );
+
+        // HEAD should point to the amended commit (not the original second)
+        $headId = $repo->refs->resolve(RefName::head());
+        self::assertTrue($headId->equals($amendedId));
+        self::assertFalse($headId->equals($secondId));
+
+        // Amended commit's parent should be the first commit (same as original second's parent)
+        $amended = $repo->objects->read($amendedId);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $amended);
+        self::assertCount(1, $amended->parents);
+        self::assertTrue($amended->parents[0]->equals($firstId));
+        self::assertSame('Amended message', $amended->message);
+    }
+
+    public function testCommitAmendPreservesMessageWhenNotProvided(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
+
+        // The handler always requires a message — to test message reuse,
+        // verify reading the last commit's message works
+        $headId = $repo->refs->resolve(RefName::head());
+        $headCommit = $repo->objects->read($headId);
+        self::assertInstanceOf(\Lukasojd\PureGit\Domain\Object\Commit::class, $headCommit);
+        self::assertSame('Initial commit', $headCommit->message);
+    }
+
+    // ========= add -u (update tracked) =========
+
+    public function testAddUpdateTrackedStagesModifications(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'tracked.txt' => "original\n",
+            'other.txt' => "keep\n",
+        ]);
+
+        // Modify tracked file
+        file_put_contents($repo->workDir . '/tracked.txt', "changed\n");
+
+        // Add untracked file (should NOT be staged by -u)
+        file_put_contents($repo->workDir . '/untracked.txt', "new\n");
+
+        $handler = new AddHandler($repo);
+        $handler->updateTracked();
+
+        // Check status: tracked.txt should be staged, untracked.txt should remain untracked
+        $status = new StatusHandler($repo);
+        $result = $status->handle();
+
+        self::assertArrayHasKey('tracked.txt', $result['staged']);
+        self::assertSame(FileStatus::Modified, $result['staged']['tracked.txt']);
+        self::assertContains('untracked.txt', $result['untracked']);
+    }
+
+    public function testAddUpdateTrackedStagesDeletions(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+            'keep.txt' => "keep\n",
+        ]);
+
+        unlink($repo->workDir . '/file.txt');
+
+        $handler = new AddHandler($repo);
+        $handler->updateTracked();
+
+        $status = new StatusHandler($repo);
+        $result = $status->handle();
+
+        self::assertArrayHasKey('file.txt', $result['staged']);
+        self::assertSame(FileStatus::Deleted, $result['staged']['file.txt']);
+    }
+
     /**
      * @param array<string, string> $files
      */

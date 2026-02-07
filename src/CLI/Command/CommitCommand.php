@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\CLI\Command;
 
+use Lukasojd\PureGit\Application\Handler\AddHandler;
 use Lukasojd\PureGit\Application\Handler\BranchHandler;
 use Lukasojd\PureGit\Application\Handler\CommitHandler;
 use Lukasojd\PureGit\Application\Handler\DiffHandler;
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\CLI\Formatter\DiffStatFormatter;
+use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Ref\RefName;
 use Lukasojd\PureGit\Infrastructure\Diff\MyersDiffAlgorithm;
 
@@ -26,7 +28,7 @@ final class CommitCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'commit -m <message>';
+        return 'commit [-a] [--amend] [--allow-empty] -m <message>';
     }
 
     /**
@@ -35,7 +37,9 @@ final class CommitCommand implements CliCommand
     public function execute(array $args): int
     {
         $message = $this->parseMessage($args);
-        if ($message === null) {
+        [$autoStage, $amend, $allowEmpty] = $this->parseFlags($args);
+
+        if ($message === null && ! $amend) {
             fwrite(STDERR, "error: switch 'm' requires a value\n");
 
             return 1;
@@ -50,17 +54,25 @@ final class CommitCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
 
-        return $this->doCommit($repo, $message);
+        if ($autoStage) {
+            new AddHandler($repo)->updateTracked();
+        }
+
+        if ($amend && $message === null) {
+            $message = $this->getLastCommitMessage($repo);
+        }
+
+        return $this->doCommit($repo, $message ?? '', amend: $amend, allowEmpty: $allowEmpty);
     }
 
-    private function doCommit(Repository $repo, string $message): int
+    private function doCommit(Repository $repo, string $message, bool $amend = false, bool $allowEmpty = false): int
     {
         $isRootCommit = ! $this->hasHead($repo);
         $diffHandler = new DiffHandler($repo, new MyersDiffAlgorithm());
         $diffs = $isRootCommit ? [] : $diffHandler->diffIndexVsHead();
 
         $handler = new CommitHandler($repo);
-        $commitId = $handler->handle($message);
+        $commitId = $handler->handle($message, allowEmpty: $allowEmpty, amend: $amend);
 
         $branchName = $this->getCurrentBranchName($repo);
         $rootLabel = $isRootCommit ? ' (root-commit)' : '';
@@ -88,6 +100,27 @@ final class CommitCommand implements CliCommand
         }
 
         return null;
+    }
+
+    /**
+     * @param list<string> $args
+     * @return array{bool, bool, bool}
+     */
+    private function parseFlags(array $args): array
+    {
+        return [
+            in_array('-a', $args, true),
+            in_array('--amend', $args, true),
+            in_array('--allow-empty', $args, true),
+        ];
+    }
+
+    private function getLastCommitMessage(Repository $repo): string
+    {
+        $headId = $repo->refs->resolve(RefName::head());
+        $commit = $repo->objects->read($headId);
+
+        return $commit instanceof Commit ? $commit->message : '';
     }
 
     private function getCurrentBranchName(Repository $repo): string

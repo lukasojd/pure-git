@@ -22,7 +22,7 @@ final class LogCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'log [-n <number>] [--oneline] [--all]';
+        return 'log [-n <number>] [--oneline] [--all] [--author=<pattern>] [--since=<date>]';
     }
 
     /**
@@ -30,7 +30,7 @@ final class LogCommand implements CliCommand
      */
     public function execute(array $args): int
     {
-        [$maxCount, $oneline, $all] = $this->parseArgs($args);
+        [$maxCount, $oneline, $all, $author, $since] = $this->parseArgs($args);
 
         $cwd = getcwd();
         if ($cwd === false) {
@@ -41,7 +41,8 @@ final class LogCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new LogHandler($repo);
-        $commits = $handler->handle($maxCount, all: $all);
+        $sinceDate = $since !== null ? new \DateTimeImmutable($since) : null;
+        $commits = $handler->handle($maxCount, all: $all, author: $author, since: $sinceDate);
 
         foreach ($commits as $i => $commit) {
             $oneline ? $this->printOneline($commit) : $this->printFull($commit, $i);
@@ -52,7 +53,7 @@ final class LogCommand implements CliCommand
 
     /**
      * @param list<string> $args
-     * @return array{int, bool, bool}
+     * @return array{int, bool, bool, ?string, ?string}
      */
     private function parseArgs(array $args): array
     {
@@ -72,7 +73,29 @@ final class LogCommand implements CliCommand
             }
         }
 
-        return [$maxCount, $oneline, $all];
+        [$author, $since] = $this->parseFilters($args);
+
+        return [$maxCount, $oneline, $all, $author, $since];
+    }
+
+    /**
+     * @param list<string> $args
+     * @return array{?string, ?string}
+     */
+    private function parseFilters(array $args): array
+    {
+        $author = null;
+        $since = null;
+
+        foreach ($args as $arg) {
+            if (str_starts_with($arg, '--author=')) {
+                $author = substr($arg, 9);
+            } elseif (str_starts_with($arg, '--since=')) {
+                $since = substr($arg, 8);
+            }
+        }
+
+        return [$author, $since];
     }
 
     private function printOneline(Commit $commit): void

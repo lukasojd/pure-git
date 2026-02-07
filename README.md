@@ -13,7 +13,9 @@ A fully functional Git-like VCS implementation in **pure PHP** — no external `
 composer require lukasojd/pure-git
 ```
 
-## CLI Usage
+## Core Command Reference
+
+All core commands are implemented and produce output matching native git.
 
 ```bash
 # Initialize a repository
@@ -22,9 +24,13 @@ bin/puregit init [<directory>]
 # Add files to the index
 bin/puregit add <pathspec>...
 bin/puregit add .
+bin/puregit add -u                  # update tracked files only
 
 # Commit staged changes
-bin/puregit commit -m "Your commit message"
+bin/puregit commit -m <message>
+bin/puregit commit -a -m <message>  # auto-stage tracked files
+bin/puregit commit --amend          # replace last commit
+bin/puregit commit --allow-empty    # allow empty commits
 
 # Show status
 bin/puregit status
@@ -34,6 +40,8 @@ bin/puregit status -s               # short format (XY path)
 bin/puregit log [-n <count>]
 bin/puregit log --oneline           # short hash + first line
 bin/puregit log --all               # all refs, not just HEAD
+bin/puregit log --author=<pattern>  # filter by author name/email
+bin/puregit log --since=<date>      # show commits after date
 
 # Show diff
 bin/puregit diff [--cached]
@@ -52,6 +60,7 @@ bin/puregit branch --unset-upstream # remove upstream tracking
 
 # Switch branches
 bin/puregit checkout <branch>
+bin/puregit checkout -b <name>      # create and switch
 bin/puregit checkout -- <file>      # restore file from HEAD
 
 # Tag operations
@@ -65,10 +74,6 @@ bin/puregit merge <branch>
 
 # Reset (supports HEAD~N, HEAD^^^, branch names, short hashes)
 bin/puregit reset [--soft|--mixed|--hard] <commit>
-bin/puregit reset --hard HEAD~3
-bin/puregit reset --hard main^^
-bin/puregit reset --hard abc1234
-bin/puregit reset --hard feature~2
 
 # Show object
 bin/puregit show [<object>]
@@ -77,16 +82,13 @@ bin/puregit show --name-only        # commit with file list only
 
 # Clone a repository (SSH, HTTP/HTTPS, or git:// protocol)
 bin/puregit clone <url> [<directory>]
-bin/puregit clone --bare <url> [<directory>]
+bin/puregit clone --bare <url>
+bin/puregit clone -b <branch> <url> # checkout specific branch
 
-# Fetch from remote
+# Fetch / Pull / Push
 bin/puregit fetch [<remote>]
-
-# Pull (fetch + merge or rebase)
 bin/puregit pull [<remote>]
 bin/puregit pull --rebase [<remote>]
-
-# Push to remote
 bin/puregit push [-u|--set-upstream] [<remote>] [<refspec>]
 
 # Commit graph (fast commit counting)
@@ -94,10 +96,10 @@ bin/puregit commit-graph write
 bin/puregit commit-graph verify
 
 # Git config
-bin/puregit config user.name                # get value (local > global)
+bin/puregit config user.name                # get value
 bin/puregit config user.name "John Doe"     # set locally
 bin/puregit config --global user.email x@y  # set globally
-bin/puregit config --list                   # list all (merged)
+bin/puregit config --list                   # list all
 bin/puregit config --unset user.name        # unset locally
 
 # Remove / Move files
@@ -229,19 +231,52 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 | defunkt/dotjs | 872 | 0.84 s | 0.70 s | 1.2x | < 32 MB |
 | sebastianbergmann/phpunit | 232K | 25.1 s | 9.8 s | 2.6x | < 256 MB |
 
-## Features
+## Feature Coverage
 
-- **Local operations**: init, add, commit, status, log, diff, branch, tag, checkout, merge, reset, show, rm, mv, config
-- **Remote operations**: clone, fetch, pull (merge & rebase), push
-- **Transport**: SSH (phpseclib), HTTP/HTTPS (curl), git:// (TCP)
-- **Internals**: loose objects, packfiles with delta encoding, pack index v2, commit-graph, three-way merge, rebase (cherry-pick chain)
-- **Performance**: object cache (LRU), streaming pack I/O, BFS with binary hash path, commit-graph for instant history queries
+### Core Commands
 
-## Limitations
+All daily-use git commands with their most important flags:
 
-- No submodule support
-- No sparse checkout
-- No shallow clone
+| Command | Flags | Status |
+|---------|-------|--------|
+| `init` | `[<directory>]` | Done |
+| `add` | `<pathspec>`, `.`, `-u` | Done |
+| `commit` | `-m`, `-a`, `--amend`, `--allow-empty` | Done |
+| `status` | `-s`/`--short` | Done |
+| `log` | `-n`, `--oneline`, `--all`, `--author=`, `--since=` | Done |
+| `diff` | `--cached`, `--stat`, `--name-only`, `<commit>..<commit>` | Done |
+| `branch` | `-d`, `-m`, `-a`, `--set-upstream-to`, `--unset-upstream` | Done |
+| `checkout` | `<branch>`, `-b`, `-- <file>` | Done |
+| `tag` | `<name>`, `-a -m`, `-d` | Done |
+| `merge` | `<branch>` (fast-forward + 3-way) | Done |
+| `reset` | `--soft`, `--mixed`, `--hard`, `HEAD~N`, short hashes | Done |
+| `show` | `--stat`, `--name-only` | Done |
+| `clone` | `--bare`, `-b`/`--branch` | Done |
+| `fetch` | `[<remote>]` | Done |
+| `pull` | `--rebase` | Done |
+| `push` | `-u`/`--set-upstream` | Done |
+| `config` | `--global`, `--list`, `--unset` | Done |
+| `rm` | `--cached` | Done |
+| `mv` | `<source> <destination>` | Done |
+
+### Extended / Not Yet Implemented
+
+| Command | Description | Status |
+|---------|-------------|--------|
+| `stash` | Save/restore working directory | Planned |
+| `rebase` | Reapply commits on another base | Planned |
+| `cherry-pick` | Apply specific commits | Planned |
+| `revert` | Undo a commit | Planned |
+| `log --graph` | ASCII branch topology | Planned |
+| `blame` | Line-by-line last modification | Planned |
+| `clean` | Remove untracked files | Planned |
+| `grep` | Search file contents in repo | Planned |
+| `reflog` | Reference log (undo safety net) | Planned |
+| `bisect` | Binary search for bugs | Planned |
+| `submodule` | Nested repositories | Planned |
+| `commit -a` + `--amend` empty check | Refuse empty amend without `--allow-empty` | Planned |
+| `clone --depth` | Shallow clone | Planned |
+| `add -p` | Interactive/patch staging | Planned |
 
 ## License
 
