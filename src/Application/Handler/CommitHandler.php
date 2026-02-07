@@ -31,11 +31,9 @@ final readonly class CommitHandler
             throw new PureGitException('Nothing to commit');
         }
 
-        if (! $author instanceof \Lukasojd\PureGit\Domain\Object\PersonInfo || ! $committer instanceof \Lukasojd\PureGit\Domain\Object\PersonInfo) {
-            $defaultPerson = $this->resolveIdentity();
-            $author ??= $defaultPerson;
-            $committer ??= $defaultPerson;
-        }
+        $identity = $author ?? $committer ?? $this->resolveIdentity();
+        $author = $identity;
+        $committer = $identity;
 
         $treeId = $this->buildTree($index);
 
