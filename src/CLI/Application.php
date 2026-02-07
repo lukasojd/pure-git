@@ -4,67 +4,44 @@ declare(strict_types=1);
 
 namespace Lukasojd\PureGit\CLI;
 
-use Lukasojd\PureGit\CLI\Command\AddCommand;
-use Lukasojd\PureGit\CLI\Command\BranchCommand;
-use Lukasojd\PureGit\CLI\Command\CheckoutCommand;
 use Lukasojd\PureGit\CLI\Command\CliCommand;
-use Lukasojd\PureGit\CLI\Command\CloneCommand;
-use Lukasojd\PureGit\CLI\Command\CommitCommand;
-use Lukasojd\PureGit\CLI\Command\CommitGraphCommand;
-use Lukasojd\PureGit\CLI\Command\ConfigCommand;
-use Lukasojd\PureGit\CLI\Command\DiffCommand;
-use Lukasojd\PureGit\CLI\Command\FetchCommand;
-use Lukasojd\PureGit\CLI\Command\InitCommand;
-use Lukasojd\PureGit\CLI\Command\LogCommand;
-use Lukasojd\PureGit\CLI\Command\MergeCommand;
-use Lukasojd\PureGit\CLI\Command\MvCommand;
-use Lukasojd\PureGit\CLI\Command\PullCommand;
-use Lukasojd\PureGit\CLI\Command\PushCommand;
-use Lukasojd\PureGit\CLI\Command\ResetCommand;
-use Lukasojd\PureGit\CLI\Command\RmCommand;
-use Lukasojd\PureGit\CLI\Command\ShowCommand;
-use Lukasojd\PureGit\CLI\Command\StatusCommand;
-use Lukasojd\PureGit\CLI\Command\TagCommand;
 
 final class Application
 {
-    private const string VERSION = '0.1.0';
+    private const string VERSION = '1.0.0';
 
     /**
-     * @var array<string, CliCommand>
+     * @var array<string, class-string<CliCommand>>
      */
-    private array $commands = [];
-
-    public function __construct()
-    {
-        $this->registerCommand(new InitCommand());
-        $this->registerCommand(new AddCommand());
-        $this->registerCommand(new CommitCommand());
-        $this->registerCommand(new StatusCommand());
-        $this->registerCommand(new LogCommand());
-        $this->registerCommand(new DiffCommand());
-        $this->registerCommand(new BranchCommand());
-        $this->registerCommand(new TagCommand());
-        $this->registerCommand(new CheckoutCommand());
-        $this->registerCommand(new MergeCommand());
-        $this->registerCommand(new ResetCommand());
-        $this->registerCommand(new ShowCommand());
-        $this->registerCommand(new RmCommand());
-        $this->registerCommand(new MvCommand());
-        $this->registerCommand(new CommitGraphCommand());
-        $this->registerCommand(new CloneCommand());
-        $this->registerCommand(new FetchCommand());
-        $this->registerCommand(new PullCommand());
-        $this->registerCommand(new PushCommand());
-        $this->registerCommand(new ConfigCommand());
-    }
+    private const array COMMAND_MAP = [
+        'init' => Command\InitCommand::class,
+        'add' => Command\AddCommand::class,
+        'commit' => Command\CommitCommand::class,
+        'status' => Command\StatusCommand::class,
+        'log' => Command\LogCommand::class,
+        'diff' => Command\DiffCommand::class,
+        'branch' => Command\BranchCommand::class,
+        'tag' => Command\TagCommand::class,
+        'checkout' => Command\CheckoutCommand::class,
+        'merge' => Command\MergeCommand::class,
+        'reset' => Command\ResetCommand::class,
+        'show' => Command\ShowCommand::class,
+        'rm' => Command\RmCommand::class,
+        'mv' => Command\MvCommand::class,
+        'commit-graph' => Command\CommitGraphCommand::class,
+        'clone' => Command\CloneCommand::class,
+        'fetch' => Command\FetchCommand::class,
+        'pull' => Command\PullCommand::class,
+        'push' => Command\PushCommand::class,
+        'config' => Command\ConfigCommand::class,
+    ];
 
     /**
      * @param list<string> $argv
      */
     public function run(array $argv): int
     {
-        array_shift($argv) ?? 'puregit';
+        array_shift($argv);
 
         if ($argv === []) {
             $this->printUsage();
@@ -86,13 +63,13 @@ final class Application
             return 0;
         }
 
-        if ($commandName === null || ! isset($this->commands[$commandName])) {
-            fwrite(STDERR, sprintf("puregit: '%s' is not a puregit command. See 'puregit --help'.\n", $commandName ?? ''));
+        if (! isset(self::COMMAND_MAP[$commandName])) {
+            fwrite(STDERR, sprintf("puregit: '%s' is not a puregit command. See 'puregit --help'.\n", $commandName));
 
             return 1;
         }
 
-        $command = $this->commands[$commandName];
+        $command = new (self::COMMAND_MAP[$commandName])();
 
         if (in_array('--help', $argv, true) || in_array('-h', $argv, true)) {
             fwrite(STDOUT, sprintf("Usage: puregit %s\n\n%s\n", $command->usage(), $command->description()));
@@ -109,18 +86,14 @@ final class Application
         }
     }
 
-    private function registerCommand(CliCommand $command): void
-    {
-        $this->commands[$command->name()] = $command;
-    }
-
     private function printUsage(): void
     {
         fwrite(STDOUT, sprintf("puregit version %s — Pure PHP Git implementation\n\n", self::VERSION));
         fwrite(STDOUT, "Usage: puregit <command> [<args>]\n\n");
         fwrite(STDOUT, "Available commands:\n");
 
-        foreach ($this->commands as $name => $command) {
+        foreach (self::COMMAND_MAP as $name => $class) {
+            $command = new $class();
             fwrite(STDOUT, sprintf("  %-12s %s\n", $name, $command->description()));
         }
 

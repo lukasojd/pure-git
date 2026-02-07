@@ -75,11 +75,18 @@ final readonly class StatusHandler
     private function computeUnstagedChanges(array $indexEntries): array
     {
         $unstaged = [];
+        $indexFileTime = @filemtime($this->repository->gitDir . '/index');
+        $indexMtime = $indexFileTime !== false ? $indexFileTime : 0;
 
         foreach ($indexEntries as $path => $entry) {
             $fullPath = $this->repository->workDir . '/' . $path;
-            if (! file_exists($fullPath)) {
+            $stat = @stat($fullPath);
+            if ($stat === false) {
                 $unstaged[$path] = FileStatus::Deleted;
+                continue;
+            }
+
+            if ($this->isStatClean($entry, $stat, $indexMtime)) {
                 continue;
             }
 
@@ -91,6 +98,22 @@ final readonly class StatusHandler
         }
 
         return $unstaged;
+    }
+
+    /**
+     * @param array{mtime: int, size: int} $stat
+     */
+    private function isStatClean(\Lukasojd\PureGit\Domain\Index\IndexEntry $entry, array $stat, int $indexMtime): bool
+    {
+        if ($entry->mtime === 0) {
+            return false;
+        }
+
+        if ($stat['mtime'] !== $entry->mtime || $stat['size'] !== $entry->fileSize) {
+            return false;
+        }
+
+        return $entry->mtime < $indexMtime;
     }
 
     /**

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Performance
+- Stat-based shortcut for unstaged change detection (9x faster cold, 5x faster warm)
+- Real stat data (mtime, size, ino, dev) stored in index entries for accurate cache
+- Racy-git detection: entries with mtime >= index file mtime are always content-verified
+- Stat-based shortcut in `add -u` (skips unchanged files)
+- Optimized working tree walk: `opendir`/`readdir` + direct `matchesRules` (skip redundant parent checks) — 2.7x faster
+- Lazy CLI command loading: only the invoked command class is loaded (saves ~5ms startup)
+
 ## [1.0.0] - 2026-02-07
 
 ### Added

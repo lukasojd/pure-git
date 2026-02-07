@@ -27,6 +27,29 @@ final readonly class IndexEntry
     ) {
     }
 
+    /**
+     * @param array{dev: int, ino: int, uid: int, gid: int, size: int, mtime: int, ctime: int} $stat
+     */
+    public static function createFromStat(string $path, ObjectId $objectId, FileMode $mode, array $stat): self
+    {
+        return new self(
+            path: $path,
+            objectId: $objectId,
+            mode: $mode,
+            ctime: $stat['ctime'],
+            ctimeNano: 0,
+            mtime: $stat['mtime'],
+            mtimeNano: 0,
+            dev: $stat['dev'],
+            ino: $stat['ino'],
+            uid: $stat['uid'],
+            gid: $stat['gid'],
+            fileSize: $stat['size'],
+            flags: min(strlen($path), 0xFFF),
+            stage: 0,
+        );
+    }
+
     public static function create(string $path, ObjectId $objectId, FileMode $mode, int $fileSize): self
     {
         $now = time();

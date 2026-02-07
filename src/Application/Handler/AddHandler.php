@@ -20,6 +20,8 @@ final readonly class AddHandler
     public function updateTracked(): void
     {
         $index = $this->repository->index->read();
+        $indexFileTime = @filemtime($this->repository->gitDir . '/index');
+        $indexMtime = $indexFileTime !== false ? $indexFileTime : 0;
 
         foreach ($index->getEntries() as $path => $entry) {
             $fullPath = $this->repository->workDir . '/' . $path;
@@ -28,11 +30,20 @@ final readonly class AddHandler
                 continue;
             }
 
+            $stat = stat($fullPath);
+            if ($stat === false) {
+                continue;
+            }
+
+            if ($this->isStatClean($entry, $stat, $indexMtime)) {
+                continue;
+            }
+
             $content = $this->repository->filesystem->read($fullPath);
             $blob = new Blob($content);
             if (! $blob->getId()->equals($entry->objectId)) {
                 $this->repository->objects->write($blob);
-                $newEntry = IndexEntry::create($path, $blob->getId(), $entry->mode, strlen($content));
+                $newEntry = IndexEntry::createFromStat($path, $blob->getId(), $entry->mode, $stat);
                 $index->addEntry($newEntry);
             }
         }
@@ -66,6 +77,22 @@ final readonly class AddHandler
         $this->repository->index->write($index);
     }
 
+    /**
+     * @param array{mtime: int, size: int} $stat
+     */
+    private function isStatClean(IndexEntry $entry, array $stat, int $indexMtime): bool
+    {
+        if ($entry->mtime === 0) {
+            return false;
+        }
+
+        if ($stat['mtime'] !== $entry->mtime || $stat['size'] !== $entry->fileSize) {
+            return false;
+        }
+
+        return $entry->mtime < $indexMtime;
+    }
+
     private function addDirectory(\Lukasojd\PureGit\Domain\Index\Index $index, string $relativePath): void
     {
         $fullPath = $this->repository->workDir . '/' . $relativePath;
@@ -88,10 +115,12 @@ final readonly class AddHandler
         $blob = new Blob($content);
         $this->repository->objects->write($blob);
 
-        $fileSize = $this->repository->filesystem->fileSize($fullPath);
+        $stat = stat($fullPath);
         $mode = is_executable($fullPath) ? FileMode::Executable : FileMode::Regular;
 
-        $entry = IndexEntry::create($relativePath, $blob->getId(), $mode, $fileSize);
+        $entry = $stat !== false
+            ? IndexEntry::createFromStat($relativePath, $blob->getId(), $mode, $stat)
+            : IndexEntry::create($relativePath, $blob->getId(), $mode, strlen($content));
         $index->addEntry($entry);
     }
 }

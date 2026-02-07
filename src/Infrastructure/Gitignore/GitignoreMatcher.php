@@ -81,8 +81,8 @@ final class GitignoreMatcher
     private function walkDir(string $relativePath, array &$files): void
     {
         $fullPath = $relativePath === '' ? $this->workDir : $this->workDir . '/' . $relativePath;
-        $items = scandir($fullPath);
-        if ($items === false) {
+        $handle = opendir($fullPath);
+        if ($handle === false) {
             return;
         }
 
@@ -90,9 +90,13 @@ final class GitignoreMatcher
             $this->loadDirChain($relativePath);
         }
 
-        foreach (array_diff($items, ['.', '..']) as $item) {
-            $this->walkItem($relativePath, $fullPath, $item, $files);
+        while (($item = readdir($handle)) !== false) {
+            if (! in_array($item, ['.', '..', '.git'], true)) {
+                $this->walkItem($relativePath, $fullPath, $item, $files);
+            }
         }
+
+        closedir($handle);
     }
 
     /**
@@ -103,10 +107,10 @@ final class GitignoreMatcher
         $itemRelative = $relativePath === '' ? $item : $relativePath . '/' . $item;
 
         if (is_dir($fullPath . '/' . $item)) {
-            if (! $this->isIgnored($itemRelative, true)) {
+            if (! $this->matchesRules($itemRelative, true)) {
                 $this->walkDir($itemRelative, $files);
             }
-        } elseif (! $this->isIgnored($itemRelative)) {
+        } elseif (! $this->matchesRules($itemRelative, false)) {
             $files[] = $itemRelative;
         }
     }
@@ -126,11 +130,11 @@ final class GitignoreMatcher
     private function isParentIgnored(string $relativePath): bool
     {
         $parts = explode('/', $relativePath);
-        array_pop($parts); // remove filename
+        array_pop($parts);
         $dir = '';
 
         foreach ($parts as $part) {
-            $dir = $dir === '' ? $part : $dir . '/' . $part;
+            $dir = ltrim($dir . '/' . $part, '/');
             if ($this->matchesRules($dir, true)) {
                 return true;
             }
