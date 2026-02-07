@@ -32,37 +32,15 @@ final readonly class DiffHandler
     public function diffWorkingVsIndex(): array
     {
         $index = $this->repository->index->read();
+        $indexFileTime = @filemtime($this->repository->gitDir . '/index');
+        $indexMtime = $indexFileTime !== false ? $indexFileTime : 0;
         $diffs = [];
 
         foreach ($index->getEntries() as $path => $entry) {
-            $fullPath = $this->repository->workDir . '/' . $path;
-
-            if (! file_exists($fullPath)) {
-                $diff = $this->diffDeletedFile($path, $entry->objectId);
-                if ($diff instanceof FileDiff) {
-                    $diffs[] = $diff;
-                }
-
-                continue;
+            $diff = $this->diffWorkingEntry($path, $entry, $indexMtime);
+            if ($diff instanceof FileDiff) {
+                $diffs[] = $diff;
             }
-
-            $workingContent = $this->repository->filesystem->read($fullPath);
-            $indexBlob = $this->repository->objects->read($entry->objectId);
-
-            if (! $indexBlob instanceof Blob) {
-                continue;
-            }
-
-            if ($workingContent === $indexBlob->content) {
-                continue;
-            }
-
-            $oldLines = $this->splitLines($indexBlob->content);
-            $newLines = $this->splitLines($workingContent);
-            $hunks = $this->contextLabels->addLabels($this->diffAlgorithm->diff($oldLines, $newLines), $oldLines);
-            $newBlob = new Blob($workingContent);
-
-            $diffs[] = new FileDiff($path, FileStatus::Modified, $hunks, $entry->objectId, $newBlob->getId());
         }
 
         return $diffs;
@@ -125,6 +103,59 @@ final readonly class DiffHandler
         }
 
         return $diffs;
+    }
+
+    private function diffWorkingEntry(string $path, \Lukasojd\PureGit\Domain\Index\IndexEntry $entry, int $indexMtime): ?FileDiff
+    {
+        $fullPath = $this->repository->workDir . '/' . $path;
+        $stat = @stat($fullPath);
+
+        if ($stat === false) {
+            return $this->diffDeletedFile($path, $entry->objectId);
+        }
+
+        if ($this->isStatClean($entry, $stat, $indexMtime)) {
+            return null;
+        }
+
+        return $this->diffWorkingModifiedEntry($path, $fullPath, $entry);
+    }
+
+    private function diffWorkingModifiedEntry(string $path, string $fullPath, \Lukasojd\PureGit\Domain\Index\IndexEntry $entry): ?FileDiff
+    {
+        $workingContent = $this->repository->filesystem->read($fullPath);
+        $indexBlob = $this->repository->objects->read($entry->objectId);
+
+        if (! $indexBlob instanceof Blob) {
+            return null;
+        }
+
+        if ($workingContent === $indexBlob->content) {
+            return null;
+        }
+
+        $oldLines = $this->splitLines($indexBlob->content);
+        $newLines = $this->splitLines($workingContent);
+        $hunks = $this->contextLabels->addLabels($this->diffAlgorithm->diff($oldLines, $newLines), $oldLines);
+        $newBlob = new Blob($workingContent);
+
+        return new FileDiff($path, FileStatus::Modified, $hunks, $entry->objectId, $newBlob->getId());
+    }
+
+    /**
+     * @param array{mtime: int, size: int} $stat
+     */
+    private function isStatClean(\Lukasojd\PureGit\Domain\Index\IndexEntry $entry, array $stat, int $indexMtime): bool
+    {
+        if ($entry->mtime === 0) {
+            return false;
+        }
+
+        if ($stat['mtime'] !== $entry->mtime || $stat['size'] !== $entry->fileSize) {
+            return false;
+        }
+
+        return $entry->mtime < $indexMtime;
     }
 
     /**

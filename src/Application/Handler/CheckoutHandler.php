@@ -10,6 +10,7 @@ use Lukasojd\PureGit\Domain\Index\Index;
 use Lukasojd\PureGit\Domain\Index\IndexEntry;
 use Lukasojd\PureGit\Domain\Object\Blob;
 use Lukasojd\PureGit\Domain\Object\Commit;
+use Lukasojd\PureGit\Domain\Object\FileMode;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\Tree;
 use Lukasojd\PureGit\Domain\Object\TreeEntry;
@@ -69,7 +70,7 @@ final readonly class CheckoutHandler
         $this->ensureParentDirectory($fullPath);
         $this->repository->filesystem->write($fullPath, $blob->content);
 
-        if ($entry->mode === \Lukasojd\PureGit\Domain\Object\FileMode::Executable) {
+        if ($entry->mode === FileMode::Executable) {
             chmod($fullPath, 0o755);
         }
     }
@@ -135,29 +136,36 @@ final readonly class CheckoutHandler
             throw new PureGitException('Target does not point to a commit');
         }
 
-        // Clear current working tree (except .git)
-        $this->cleanWorkingTree();
-
-        // Write new tree to working directory and update index
+        $oldPaths = $this->collectCurrentIndexPaths();
         $index = new Index();
-        $this->writeTree($commit->treeId, '', $index);
+        $this->writeTree($commit->treeId, '', $index, $oldPaths);
+        $this->removeObsoleteFiles($oldPaths, $index);
         $this->repository->index->write($index);
     }
 
-    private function cleanWorkingTree(): void
+    /**
+     * @return array<string, ObjectId>
+     */
+    private function collectCurrentIndexPaths(): array
     {
-        $files = $this->repository->filesystem->listDirectory($this->repository->workDir);
-        foreach ($files as $file) {
-            if ($file === '.git') {
-                continue;
-            }
-
-            $fullPath = $this->repository->workDir . '/' . $file;
-            $this->repository->filesystem->delete($fullPath);
+        try {
+            $currentIndex = $this->repository->index->read();
+        } catch (\Throwable) {
+            return [];
         }
+
+        $paths = [];
+        foreach ($currentIndex->getEntries() as $path => $entry) {
+            $paths[$path] = $entry->objectId;
+        }
+
+        return $paths;
     }
 
-    private function writeTree(ObjectId $treeId, string $prefix, Index $index): void
+    /**
+     * @param array<string, ObjectId> $oldPaths
+     */
+    private function writeTree(ObjectId $treeId, string $prefix, Index $index, array $oldPaths): void
     {
         $tree = $this->repository->objects->read($treeId);
         if (! $tree instanceof Tree) {
@@ -166,34 +174,103 @@ final readonly class CheckoutHandler
 
         foreach ($tree->entries as $entry) {
             $path = $prefix === '' ? $entry->name : $prefix . '/' . $entry->name;
-            $this->writeTreeEntry($entry, $path, $index);
+            $this->writeTreeEntry($entry, $path, $index, $oldPaths);
         }
     }
 
-    private function writeTreeEntry(TreeEntry $entry, string $path, Index $index): void
+    /**
+     * @param array<string, ObjectId> $oldPaths
+     */
+    private function writeTreeEntry(TreeEntry $entry, string $path, Index $index, array $oldPaths): void
     {
         if ($entry->isTree()) {
             $fullDir = $this->repository->workDir . '/' . $path;
             $this->repository->filesystem->mkdir($fullDir);
-            $this->writeTree($entry->objectId, $path, $index);
+            $this->writeTree($entry->objectId, $path, $index, $oldPaths);
             return;
         }
 
+        $fullPath = $this->repository->workDir . '/' . $path;
+
+        if ($this->canReuseFile($path, $entry->objectId, $fullPath, $oldPaths)) {
+            $stat = stat($fullPath);
+            if ($stat !== false) {
+                $index->addEntry(IndexEntry::createFromStat($path, $entry->objectId, $entry->mode, $stat));
+                return;
+            }
+        }
+
+        $this->writeFileToWorkingTree($entry, $fullPath, $path, $index);
+    }
+
+    /**
+     * @param array<string, ObjectId> $oldPaths
+     */
+    private function canReuseFile(string $path, ObjectId $objectId, string $fullPath, array $oldPaths): bool
+    {
+        return isset($oldPaths[$path]) && $oldPaths[$path]->equals($objectId) && file_exists($fullPath);
+    }
+
+    private function writeFileToWorkingTree(TreeEntry $entry, string $fullPath, string $path, Index $index): void
+    {
         $blob = $this->repository->objects->read($entry->objectId);
         if (! $blob instanceof Blob) {
             return;
         }
 
-        $fullPath = $this->repository->workDir . '/' . $path;
         $this->ensureParentDirectory($fullPath);
         $this->repository->filesystem->write($fullPath, $blob->content);
 
-        if ($entry->mode === \Lukasojd\PureGit\Domain\Object\FileMode::Executable) {
+        if ($entry->mode === FileMode::Executable) {
             chmod($fullPath, 0o755);
         }
 
-        $indexEntry = IndexEntry::create($path, $entry->objectId, $entry->mode, strlen($blob->content));
+        $stat = stat($fullPath);
+        $indexEntry = $stat !== false
+            ? IndexEntry::createFromStat($path, $entry->objectId, $entry->mode, $stat)
+            : IndexEntry::create($path, $entry->objectId, $entry->mode, strlen($blob->content));
         $index->addEntry($indexEntry);
+    }
+
+    /**
+     * @param array<string, ObjectId> $oldPaths
+     */
+    private function removeObsoleteFiles(array $oldPaths, Index $newIndex): void
+    {
+        $dirsToCheck = [];
+        foreach (array_keys($oldPaths) as $path) {
+            if ($newIndex->hasEntry($path)) {
+                continue;
+            }
+
+            $fullPath = $this->repository->workDir . '/' . $path;
+            if (file_exists($fullPath)) {
+                unlink($fullPath);
+                $dirsToCheck[dirname($path)] = true;
+            }
+        }
+
+        foreach (array_keys($dirsToCheck) as $dir) {
+            $this->removeEmptyParentChain($dir);
+        }
+    }
+
+    private function removeEmptyParentChain(string $relativePath): void
+    {
+        while ($relativePath !== '' && $relativePath !== '.') {
+            $fullDir = $this->repository->workDir . '/' . $relativePath;
+            if (! is_dir($fullDir)) {
+                break;
+            }
+
+            $items = @scandir($fullDir);
+            if ($items === false || count($items) > 2) {
+                break;
+            }
+
+            rmdir($fullDir);
+            $relativePath = dirname($relativePath);
+        }
     }
 
     private function findEntryInTree(ObjectId $treeId, string $path): ?TreeEntry

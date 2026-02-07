@@ -9,6 +9,10 @@
 - Stat-based shortcut in `add -u` (skips unchanged files)
 - Optimized working tree walk: `opendir`/`readdir` + direct `matchesRules` (skip redundant parent checks) — 2.7x faster
 - Lazy CLI command loading: only the invoked command class is loaded (saves ~5ms startup)
+- Incremental checkout: skip unchanged files between branches (7x faster — 47ms → 6.5ms for 500 files)
+- Stat-based shortcut in `diff` working-vs-index (2x faster — skips unchanged files)
+- Checkout uses `createFromStat()` for accurate index entries
+- Empty directory cleanup after removing obsolete files during checkout
 
 ## [1.0.0] - 2026-02-07
 
