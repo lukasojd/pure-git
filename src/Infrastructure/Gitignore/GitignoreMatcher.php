@@ -26,23 +26,13 @@ final class GitignoreMatcher
         private readonly string $workDir,
         string $gitDir,
     ) {
-        // Global excludes first (lowest priority)
         $globalExcludes = $this->findGlobalExcludesFile($gitDir);
-        if ($globalExcludes !== null && file_exists($globalExcludes)) {
-            $this->loadFile($globalExcludes, '');
+        if ($globalExcludes !== null) {
+            $this->loadFileIfExists($globalExcludes, '');
         }
 
-        // info/exclude
-        $excludePath = $gitDir . '/info/exclude';
-        if (file_exists($excludePath)) {
-            $this->loadFile($excludePath, '');
-        }
-
-        // Root .gitignore (highest eager priority)
-        $rootIgnore = $workDir . '/.gitignore';
-        if (file_exists($rootIgnore)) {
-            $this->loadFile($rootIgnore, '');
-        }
+        $this->loadFileIfExists($gitDir . '/info/exclude', '');
+        $this->loadFileIfExists($workDir . '/.gitignore', '');
     }
 
     public function isIgnored(string $relativePath, bool $isDirectory = false): bool
@@ -58,7 +48,10 @@ final class GitignoreMatcher
             return true;
         }
 
-        return $this->matchesRules($relativePath, $isDirectory);
+        $slash = strrpos($relativePath, '/');
+        $basename = $slash !== false ? substr($relativePath, $slash + 1) : $relativePath;
+
+        return $this->matchesRules($relativePath, $basename, $isDirectory);
     }
 
     /**
@@ -87,7 +80,7 @@ final class GitignoreMatcher
         }
 
         if ($relativePath !== '') {
-            $this->loadDirChain($relativePath);
+            $this->loadCurrentDirIgnore($fullPath, $relativePath);
         }
 
         while (($item = readdir($handle)) !== false) {
@@ -107,19 +100,33 @@ final class GitignoreMatcher
         $itemRelative = $relativePath === '' ? $item : $relativePath . '/' . $item;
 
         if (is_dir($fullPath . '/' . $item)) {
-            if (! $this->matchesRules($itemRelative, true)) {
+            if (! $this->matchesRules($itemRelative, $item, true)) {
                 $this->walkDir($itemRelative, $files);
             }
-        } elseif (! $this->matchesRules($itemRelative, false)) {
+        } elseif (! $this->matchesRules($itemRelative, $item, false)) {
             $files[] = $itemRelative;
         }
     }
 
-    private function matchesRules(string $path, bool $isDirectory): bool
+    private function loadCurrentDirIgnore(string $fullPath, string $relativePath): void
+    {
+        if (isset($this->checkedDirs[$relativePath])) {
+            return;
+        }
+
+        $this->checkedDirs[$relativePath] = true;
+        $gitignorePath = $fullPath . '/.gitignore';
+
+        if (file_exists($gitignorePath)) {
+            $this->loadFile($gitignorePath, $relativePath);
+        }
+    }
+
+    private function matchesRules(string $path, string $basename, bool $isDirectory): bool
     {
         $ignored = false;
         foreach ($this->rules as $rule) {
-            if ($rule->matches($path, $isDirectory)) {
+            if ($rule->matches($path, $basename, $isDirectory)) {
                 $ignored = ! $rule->negation;
             }
         }
@@ -135,7 +142,7 @@ final class GitignoreMatcher
 
         foreach ($parts as $part) {
             $dir = ltrim($dir . '/' . $part, '/');
-            if ($this->matchesRules($dir, true)) {
+            if ($this->matchesRules($dir, $part, true)) {
                 return true;
             }
         }
@@ -160,7 +167,7 @@ final class GitignoreMatcher
         $path = '';
 
         foreach ($parts as $part) {
-            $path = $path === '' ? $part : $path . '/' . $part;
+            $path = ltrim($path . '/' . $part, '/');
 
             if (isset($this->checkedDirs[$path])) {
                 continue;
@@ -235,6 +242,13 @@ final class GitignoreMatcher
         }
 
         return $match[1];
+    }
+
+    private function loadFileIfExists(string $path, string $scope): void
+    {
+        if (file_exists($path)) {
+            $this->loadFile($path, $scope);
+        }
     }
 
     private function loadFile(string $filePath, string $scope): void

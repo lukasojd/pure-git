@@ -13,6 +13,10 @@
 - Stat-based shortcut in `diff` working-vs-index (2x faster — skips unchanged files)
 - Checkout uses `createFromStat()` for accurate index entries
 - Empty directory cleanup after removing obsolete files during checkout
+- Direct `unpack()`/`pack()` for index I/O — bypasses BinaryReader/Writer abstraction (index read 3.2x faster, write 2.9x faster)
+- Gitignore matching: literal pattern fast path (skip regex for simple patterns like `.DS_Store`)
+- Gitignore matching: extract basename once per item instead of per-rule
+- Gitignore walker: load only current dir's `.gitignore` (parent already loaded by parent walkDir)
 
 ## [1.0.0] - 2026-02-07
 

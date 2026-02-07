@@ -13,6 +13,8 @@ final readonly class GitignoreRule
 
     private bool $basenameOnly;
 
+    private ?string $literalPattern;
+
     public function __construct(
         public bool $negation,
         public bool $directoryOnly,
@@ -20,29 +22,46 @@ final readonly class GitignoreRule
         string $pattern,
     ) {
         $this->basenameOnly = ! str_contains($pattern, '/');
+        $this->literalPattern = $this->detectLiteral($pattern);
         $this->regex = $this->compilePattern($pattern);
     }
 
-    public function matches(string $relativePath, bool $isDirectory): bool
+    public function matches(string $relativePath, string $basename, bool $isDirectory): bool
     {
         if ($this->directoryOnly && ! $isDirectory) {
             return false;
         }
 
-        // Scope check: path must be under this rule's directory
         if ($this->scope !== '' && ! str_starts_with($relativePath, $this->scope . '/')) {
             return false;
         }
 
-        $pathToMatch = $this->scope !== '' ? substr($relativePath, strlen($this->scope) + 1) : $relativePath;
-
-        // Basename-only patterns match against the last component
         if ($this->basenameOnly) {
-            $slash = strrpos($pathToMatch, '/');
-            $pathToMatch = $slash !== false ? substr($pathToMatch, $slash + 1) : $pathToMatch;
+            return $this->matchAgainst($basename);
         }
 
-        return preg_match($this->regex, $pathToMatch) === 1;
+        $pathToMatch = $this->scope !== '' ? substr($relativePath, strlen($this->scope) + 1) : $relativePath;
+
+        return $this->matchAgainst($pathToMatch);
+    }
+
+    private function matchAgainst(string $value): bool
+    {
+        if ($this->literalPattern !== null) {
+            return $value === $this->literalPattern;
+        }
+
+        return preg_match($this->regex, $value) === 1;
+    }
+
+    private function detectLiteral(string $pattern): ?string
+    {
+        $clean = ltrim($pattern, '/');
+        if ($clean === '' || preg_match('/[*?[\\\\]/', $clean) === 1) {
+            return null;
+        }
+
+        return $clean;
     }
 
     private function compilePattern(string $pattern): string

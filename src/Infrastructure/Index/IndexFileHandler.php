@@ -11,8 +11,6 @@ use Lukasojd\PureGit\Domain\Object\FileMode;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Repository\IndexStorageInterface;
 use Lukasojd\PureGit\Infrastructure\Lock\LockFile;
-use Lukasojd\PureGit\Support\BinaryReader;
-use Lukasojd\PureGit\Support\BinaryWriter;
 
 final readonly class IndexFileHandler implements IndexStorageInterface
 {
@@ -36,28 +34,7 @@ final readonly class IndexFileHandler implements IndexStorageInterface
             throw IndexException::corruptIndex('Cannot read index file');
         }
 
-        $reader = new BinaryReader($data);
-
-        // Header
-        $signature = $reader->readBytes(4);
-        if ($signature !== self::SIGNATURE) {
-            throw IndexException::corruptIndex('Invalid signature');
-        }
-
-        $version = $reader->readUint32();
-        if ($version !== self::VERSION) {
-            throw IndexException::corruptIndex(sprintf('Unsupported version: %d', $version));
-        }
-
-        $entryCount = $reader->readUint32();
-
-        $entries = [];
-        for ($i = 0; $i < $entryCount; $i++) {
-            $entry = $this->readEntry($reader);
-            $entries[$entry->path] = $entry;
-        }
-
-        return new Index($entries);
+        return $this->parseIndex($data);
     }
 
     public function write(Index $index): void
@@ -65,103 +42,102 @@ final readonly class IndexFileHandler implements IndexStorageInterface
         $lock = new LockFile($this->indexPath);
         $lock->acquire();
 
-        $writer = new BinaryWriter();
-
-        // Header
-        $writer->writeBytes(self::SIGNATURE);
-        $writer->writeUint32(self::VERSION);
-        $writer->writeUint32($index->count());
+        $chunks = [];
+        $chunks[] = pack('a4NN', self::SIGNATURE, self::VERSION, $index->count());
 
         foreach ($index->getSortedEntries() as $entry) {
-            $this->writeEntry($writer, $entry);
+            $chunks[] = $this->packEntry($entry);
         }
 
-        $data = $writer->getBuffer();
+        $data = implode('', $chunks);
         $checksum = hash('sha1', $data, true);
 
         $lock->write($data . $checksum);
         $lock->commit();
     }
 
-    private function readEntry(BinaryReader $reader): IndexEntry
+    private function parseIndex(string $data): Index
     {
-        $startOffset = $reader->getOffset();
+        /** @var array{sig: string, version: int, count: int} $header */
+        $header = unpack('a4sig/Nversion/Ncount', $data);
 
-        $ctimeSec = $reader->readUint32();
-        $ctimeNano = $reader->readUint32();
-        $mtimeSec = $reader->readUint32();
-        $mtimeNano = $reader->readUint32();
-        $dev = $reader->readUint32();
-        $ino = $reader->readUint32();
-        $modeRaw = $reader->readUint32();
-        $uid = $reader->readUint32();
-        $gid = $reader->readUint32();
-        $fileSize = $reader->readUint32();
-        $objectId = ObjectId::fromBinary($reader->readBytes(20));
-        $flags = $reader->readUint16();
-
-        $nameLength = $flags & 0xFFF;
-        $stage = ($flags >> 12) & 0x03;
-        $path = $reader->readBytes($nameLength);
-
-        // Null byte after name
-        $reader->readBytes(1);
-
-        // Padding to 8-byte boundary
-        $entryLength = $reader->getOffset() - $startOffset;
-        $padding = (8 - ($entryLength % 8)) % 8;
-        if ($padding > 0) {
-            $reader->skip($padding);
+        if ($header['sig'] !== self::SIGNATURE) {
+            throw IndexException::corruptIndex('Invalid signature');
         }
 
-        $mode = FileMode::tryFrom($modeRaw) ?? FileMode::Regular;
+        if ($header['version'] !== self::VERSION) {
+            throw IndexException::corruptIndex(sprintf('Unsupported version: %d', $header['version']));
+        }
+
+        $entryCount = $header['count'];
+        $offset = 12;
+        $entries = [];
+
+        for ($i = 0; $i < $entryCount; $i++) {
+            $entry = $this->readEntryDirect($data, $offset);
+            $entries[$entry->path] = $entry;
+        }
+
+        return new Index($entries);
+    }
+
+    private function readEntryDirect(string $data, int &$offset): IndexEntry
+    {
+        /** @var array{ctime: int, ctimeNano: int, mtime: int, mtimeNano: int, dev: int, ino: int, mode: int, uid: int, gid: int, size: int} $fields */
+        $fields = unpack('Nctime/NctimeNano/Nmtime/NmtimeNano/Ndev/Nino/Nmode/Nuid/Ngid/Nsize', $data, $offset);
+        $hash = substr($data, $offset + 40, 20);
+
+        /** @var array{flags: int} $flagsArr */
+        $flagsArr = unpack('nflags', $data, $offset + 60);
+        $flags = $flagsArr['flags'];
+
+        $nameLen = $flags & 0xFFF;
+        $stage = ($flags >> 12) & 0x03;
+        $path = substr($data, $offset + 62, $nameLen);
+
+        // Advance past entry: 62 fixed + nameLen + 1 null, padded to 8 bytes
+        $entryLen = 63 + $nameLen;
+        $offset += $entryLen + ((8 - ($entryLen % 8)) % 8);
 
         return new IndexEntry(
             path: $path,
-            objectId: $objectId,
-            mode: $mode,
-            ctime: $ctimeSec,
-            ctimeNano: $ctimeNano,
-            mtime: $mtimeSec,
-            mtimeNano: $mtimeNano,
-            dev: $dev,
-            ino: $ino,
-            uid: $uid,
-            gid: $gid,
-            fileSize: $fileSize,
+            objectId: ObjectId::fromBinary($hash),
+            mode: FileMode::tryFrom($fields['mode']) ?? FileMode::Regular,
+            ctime: $fields['ctime'],
+            ctimeNano: $fields['ctimeNano'],
+            mtime: $fields['mtime'],
+            mtimeNano: $fields['mtimeNano'],
+            dev: $fields['dev'],
+            ino: $fields['ino'],
+            uid: $fields['uid'],
+            gid: $fields['gid'],
+            fileSize: $fields['size'],
             flags: $flags,
             stage: $stage,
         );
     }
 
-    private function writeEntry(BinaryWriter $writer, IndexEntry $entry): void
+    private function packEntry(IndexEntry $entry): string
     {
-        $startLength = $writer->getLength();
-
-        $writer->writeUint32($entry->ctime);
-        $writer->writeUint32($entry->ctimeNano);
-        $writer->writeUint32($entry->mtime);
-        $writer->writeUint32($entry->mtimeNano);
-        $writer->writeUint32($entry->dev);
-        $writer->writeUint32($entry->ino);
-        $writer->writeUint32($entry->mode->value);
-        $writer->writeUint32($entry->uid);
-        $writer->writeUint32($entry->gid);
-        $writer->writeUint32($entry->fileSize);
-        $writer->writeBytes($entry->objectId->toBinary());
-
         $nameLen = min(strlen($entry->path), 0xFFF);
         $flags = ($entry->stage << 12) | $nameLen;
-        $writer->writeUint16($flags);
 
-        $writer->writeBytes($entry->path);
-        $writer->writeBytes("\0");
+        $entryData = pack(
+            'NNNNNNNNNN',
+            $entry->ctime,
+            $entry->ctimeNano,
+            $entry->mtime,
+            $entry->mtimeNano,
+            $entry->dev,
+            $entry->ino,
+            $entry->mode->value,
+            $entry->uid,
+            $entry->gid,
+            $entry->fileSize,
+        ) . $entry->objectId->toBinary() . pack('n', $flags) . $entry->path . "\0";
 
-        // Pad to 8-byte boundary
-        $entryLength = $writer->getLength() - $startLength;
-        $padding = (8 - ($entryLength % 8)) % 8;
-        if ($padding > 0) {
-            $writer->writeBytes(str_repeat("\0", $padding));
-        }
+        $padding = (8 - (strlen($entryData) % 8)) % 8;
+
+        return $padding > 0 ? $entryData . str_repeat("\0", $padding) : $entryData;
     }
 }
