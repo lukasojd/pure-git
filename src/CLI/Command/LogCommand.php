@@ -58,7 +58,7 @@ final class LogCommand implements CliCommand
             fwrite(STDOUT, sprintf("commit %s\n", $commit->getId()->hash));
             fwrite(STDOUT, sprintf("Author: %s <%s>\n", $commit->author->name, $commit->author->email));
             fwrite(STDOUT, sprintf("Date:   %s\n", $commit->author->timestamp->format('D M j H:i:s Y O')));
-            fwrite(STDOUT, sprintf("\n    %s\n", $commit->message));
+            fwrite(STDOUT, sprintf("\n    %s\n", rtrim($commit->message)));
             $isFirst = false;
         }
 
