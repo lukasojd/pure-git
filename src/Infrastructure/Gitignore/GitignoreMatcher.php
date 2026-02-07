@@ -22,11 +22,15 @@ final class GitignoreMatcher
      */
     private array $checkedDirs = [];
 
+    private string $combinedBasenameRegex = '';
+
+    private string $combinedPathRegex = '';
+
     public function __construct(
         private readonly string $workDir,
         string $gitDir,
     ) {
-        $globalExcludes = $this->findGlobalExcludesFile($gitDir);
+        $globalExcludes = GlobalExcludesLocator::find($gitDir);
         if ($globalExcludes !== null) {
             $this->loadFileIfExists($globalExcludes, '');
         }
@@ -80,7 +84,7 @@ final class GitignoreMatcher
         }
 
         if ($relativePath !== '') {
-            $this->loadCurrentDirIgnore($fullPath, $relativePath);
+            $this->loadDirIgnoreIfNeeded($relativePath);
         }
 
         while (($item = readdir($handle)) !== false) {
@@ -108,14 +112,14 @@ final class GitignoreMatcher
         }
     }
 
-    private function loadCurrentDirIgnore(string $fullPath, string $relativePath): void
+    private function loadDirIgnoreIfNeeded(string $relativePath): void
     {
         if (isset($this->checkedDirs[$relativePath])) {
             return;
         }
 
         $this->checkedDirs[$relativePath] = true;
-        $gitignorePath = $fullPath . '/.gitignore';
+        $gitignorePath = $this->workDir . '/' . $relativePath . '/.gitignore';
 
         if (file_exists($gitignorePath)) {
             $this->loadFile($gitignorePath, $relativePath);
@@ -124,6 +128,10 @@ final class GitignoreMatcher
 
     private function matchesRules(string $path, string $basename, bool $isDirectory): bool
     {
+        if (! $this->couldMatchAnyRule($basename, $path)) {
+            return false;
+        }
+
         $ignored = false;
         foreach ($this->rules as $rule) {
             if ($rule->matches($path, $basename, $isDirectory)) {
@@ -132,6 +140,45 @@ final class GitignoreMatcher
         }
 
         return $ignored;
+    }
+
+    private function couldMatchAnyRule(string $basename, string $path): bool
+    {
+        if ($this->combinedBasenameRegex !== '' && preg_match($this->combinedBasenameRegex, $basename) === 1) {
+            return true;
+        }
+
+        return $this->combinedPathRegex !== '' && preg_match($this->combinedPathRegex, $path) === 1;
+    }
+
+    private function rebuildFastPath(): void
+    {
+        $basenameFragments = [];
+        $pathFragments = [];
+
+        foreach ($this->rules as $rule) {
+            if ($rule->basenameOnly) {
+                $basenameFragments[] = $rule->regexFragment;
+            } else {
+                $pathFragments[] = $this->buildPathFragment($rule);
+            }
+        }
+
+        $this->combinedBasenameRegex = $basenameFragments !== []
+            ? '#^(?:' . implode('|', $basenameFragments) . ')$#'
+            : '';
+        $this->combinedPathRegex = $pathFragments !== []
+            ? '#(?:' . implode('|', $pathFragments) . ')#'
+            : '';
+    }
+
+    private function buildPathFragment(GitignoreRule $rule): string
+    {
+        $fragment = $rule->scope !== ''
+            ? $rule->scope . '/' . $rule->regexFragment
+            : $rule->regexFragment;
+
+        return $rule->anchored ? '^' . $fragment . '$' : '(?:^|/)' . $fragment . '$';
     }
 
     private function isParentIgnored(string $relativePath): bool
@@ -168,80 +215,8 @@ final class GitignoreMatcher
 
         foreach ($parts as $part) {
             $path = ltrim($path . '/' . $part, '/');
-
-            if (isset($this->checkedDirs[$path])) {
-                continue;
-            }
-
-            $this->checkedDirs[$path] = true;
-            $gitignorePath = $this->workDir . '/' . $path . '/.gitignore';
-
-            if (file_exists($gitignorePath)) {
-                $this->loadFile($gitignorePath, $path);
-            }
+            $this->loadDirIgnoreIfNeeded($path);
         }
-    }
-
-    private function findGlobalExcludesFile(string $gitDir): ?string
-    {
-        $home = $this->getHomeDir();
-        $path = $this->findExcludesInConfig($gitDir, $home);
-
-        if ($path !== null) {
-            return $path;
-        }
-
-        if ($home === null) {
-            return null;
-        }
-
-        $xdgHome = \is_string($_SERVER['XDG_CONFIG_HOME'] ?? null) ? $_SERVER['XDG_CONFIG_HOME'] : $home . '/.config';
-
-        return $xdgHome . '/git/ignore';
-    }
-
-    private function getHomeDir(): ?string
-    {
-        $home = $_SERVER['HOME'] ?? null;
-
-        return \is_string($home) ? $home : null;
-    }
-
-    private function findExcludesInConfig(string $gitDir, ?string $home): ?string
-    {
-        $path = $this->readConfigExcludesFile($gitDir . '/config');
-
-        if ($path === null && $home !== null) {
-            $path = $this->readConfigExcludesFile($home . '/.gitconfig');
-        }
-
-        if ($path === null) {
-            return null;
-        }
-
-        return str_starts_with($path, '~/') && $home !== null ? $home . substr($path, 1) : $path;
-    }
-
-    private function readConfigExcludesFile(string $configPath): ?string
-    {
-        if (! file_exists($configPath)) {
-            return null;
-        }
-
-        $content = file_get_contents($configPath);
-        if ($content === false) {
-            return null;
-        }
-
-        if (preg_match('/^\[core\]\s*$(.+?)(?=^\[|\z)/ms', $content, $section) !== 1) {
-            return null;
-        }
-
-        if (preg_match('/^\s*excludes[Ff]ile\s*=\s*(.+?)\s*$/m', $section[1], $match) !== 1) {
-            return null;
-        }
-
-        return $match[1];
     }
 
     private function loadFileIfExists(string $path, string $scope): void
@@ -259,41 +234,12 @@ final class GitignoreMatcher
         }
 
         foreach (explode("\n", $content) as $line) {
-            $rule = $this->parseLine($line, $scope);
+            $rule = GitignoreRule::fromLine($line, $scope);
             if ($rule instanceof GitignoreRule) {
                 $this->rules[] = $rule;
             }
         }
-    }
 
-    private function parseLine(string $line, string $scope): ?GitignoreRule
-    {
-        $line = rtrim($line);
-        if ($line === '' || $line[0] === '#') {
-            return null;
-        }
-
-        $negation = false;
-        if ($line[0] === '!') {
-            $negation = true;
-            $line = substr($line, 1);
-        }
-
-        $directoryOnly = false;
-        if (str_ends_with($line, '/')) {
-            $directoryOnly = true;
-            $line = rtrim($line, '/');
-        }
-
-        if ($line === '') {
-            return null;
-        }
-
-        return new GitignoreRule(
-            negation: $negation,
-            directoryOnly: $directoryOnly,
-            scope: $scope,
-            pattern: $line,
-        );
+        $this->rebuildFastPath();
     }
 }

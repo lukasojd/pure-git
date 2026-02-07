@@ -17,6 +17,7 @@
 - Gitignore matching: literal pattern fast path (skip regex for simple patterns like `.DS_Store`)
 - Gitignore matching: extract basename once per item instead of per-rule
 - Gitignore walker: load only current dir's `.gitignore` (parent already loaded by parent walkDir)
+- Combined regex fast-reject for gitignore matching: 2 `preg_match` calls (basename + path) instead of N per-rule checks — walk 2x faster (15ms → 7.7ms)
 
 ## [1.0.0] - 2026-02-07
 

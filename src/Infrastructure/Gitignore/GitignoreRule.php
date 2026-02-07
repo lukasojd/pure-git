@@ -9,11 +9,15 @@ namespace Lukasojd\PureGit\Infrastructure\Gitignore;
  */
 final readonly class GitignoreRule
 {
+    public bool $basenameOnly;
+
+    public ?string $literalPattern;
+
+    public string $regexFragment;
+
+    public bool $anchored;
+
     private string $regex;
-
-    private bool $basenameOnly;
-
-    private ?string $literalPattern;
 
     public function __construct(
         public bool $negation,
@@ -23,7 +27,42 @@ final readonly class GitignoreRule
     ) {
         $this->basenameOnly = ! str_contains($pattern, '/');
         $this->literalPattern = $this->detectLiteral($pattern);
-        $this->regex = $this->compilePattern($pattern);
+        $this->anchored = str_starts_with($pattern, '/');
+
+        $cleanPattern = $this->anchored ? substr($pattern, 1) : $pattern;
+        $this->regexFragment = $this->globToRegex($cleanPattern);
+        $this->regex = $this->anchored ? '#^' . $this->regexFragment . '$#' : '#(?:^|/)' . $this->regexFragment . '$#';
+    }
+
+    public static function fromLine(string $line, string $scope): ?self
+    {
+        $line = rtrim($line);
+        if ($line === '' || $line[0] === '#') {
+            return null;
+        }
+
+        $negation = false;
+        if ($line[0] === '!') {
+            $negation = true;
+            $line = substr($line, 1);
+        }
+
+        $directoryOnly = false;
+        if (str_ends_with($line, '/')) {
+            $directoryOnly = true;
+            $line = rtrim($line, '/');
+        }
+
+        if ($line === '') {
+            return null;
+        }
+
+        return new self(
+            negation: $negation,
+            directoryOnly: $directoryOnly,
+            scope: $scope,
+            pattern: $line,
+        );
     }
 
     public function matches(string $relativePath, string $basename, bool $isDirectory): bool
@@ -62,18 +101,6 @@ final readonly class GitignoreRule
         }
 
         return $clean;
-    }
-
-    private function compilePattern(string $pattern): string
-    {
-        $anchored = str_starts_with($pattern, '/');
-        if ($anchored) {
-            $pattern = substr($pattern, 1);
-        }
-
-        $regex = $this->globToRegex($pattern);
-
-        return $anchored ? '#^' . $regex . '$#' : '#(?:^|/)' . $regex . '$#';
     }
 
     private function globToRegex(string $pattern): string
