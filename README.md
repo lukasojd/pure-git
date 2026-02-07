@@ -39,6 +39,7 @@ bin/puregit diff [--cached]
 bin/puregit branch                  # list branches
 bin/puregit branch <name>           # create branch
 bin/puregit branch -d <name>        # delete branch
+bin/puregit branch --unset-upstream # remove upstream tracking
 
 # Switch branches
 bin/puregit checkout <branch>
@@ -74,11 +75,18 @@ bin/puregit pull [<remote>]
 bin/puregit pull --rebase [<remote>]
 
 # Push to remote
-bin/puregit push [<remote>] [<refspec>]
+bin/puregit push [-u|--set-upstream] [<remote>] [<refspec>]
 
 # Commit graph (fast commit counting)
 bin/puregit commit-graph write
 bin/puregit commit-graph verify
+
+# Git config
+bin/puregit config user.name                # get value (local > global)
+bin/puregit config user.name "John Doe"     # set locally
+bin/puregit config --global user.email x@y  # set globally
+bin/puregit config --list                   # list all (merged)
+bin/puregit config --unset user.name        # unset locally
 
 # Remove / Move files
 bin/puregit rm [--cached] <file>...
@@ -211,7 +219,7 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3576 files):
 
 ## Features
 
-- **Local operations**: init, add, commit, status, log, diff, branch, tag, checkout, merge, reset, show, rm, mv
+- **Local operations**: init, add, commit, status, log, diff, branch, tag, checkout, merge, reset, show, rm, mv, config
 - **Remote operations**: clone, fetch, pull (merge & rebase), push
 - **Transport**: SSH (phpseclib), HTTP/HTTPS (curl), git:// (TCP)
 - **Internals**: loose objects, packfiles with delta encoding, pack index v2, commit-graph, three-way merge, rebase (cherry-pick chain)

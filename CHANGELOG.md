@@ -8,7 +8,7 @@
 - git:// transport (TCP sockets) for clone, fetch (read-only)
 - Fetch command (`puregit fetch`)
 - Pull command with merge and rebase modes (`puregit pull [--rebase]`)
-- Push command (`puregit push`)
+- Push command (`puregit push [-u|--set-upstream]`)
 - Rebase handler (cherry-pick chain for `pull --rebase`)
 - Git-style diffstat output for pull (file listing with colored +/- bar graph)
 - Commit-graph binary format (280x speedup for commit counting)
@@ -19,12 +19,26 @@
 - Pack index generation when transport doesn't produce .idx (LocalTransport)
 - Docker-based acceptance tests (SSH + HTTP full cycle)
 - GitHub Actions CI for acceptance tests
-- Unit tests for pull, reset, diff, diffstat formatter (186 tests, 578 assertions)
+- Config command (`puregit config`) for get/set/list/unset of local and global options
+- `checkout -b` shorthand for creating and switching to a new branch
+- `branch --unset-upstream` to remove upstream tracking configuration
+- Colored status output (green for staged, red for unstaged/untracked)
+- Git-style commit output with branch name, short hash, and summary
+- Status shows "upstream is gone" when remote branch has been deleted
+- Push updates local remote-tracking ref (`refs/remotes/<remote>/<branch>`) after success
+- Push `-u`/`--set-upstream` flag for configuring upstream tracking
+- ConfigHandler replaces duplicated config parsing in CommitHandler
+- Unit tests for config, push, branch, tracking info (227 tests, 660 assertions)
 
 ### Fixed
+- Push crashes when remote has branches not fetched locally ("Object not found")
+- Push output now matches native git (stderr for "Everything up-to-date", no "To" line when up-to-date)
+- Push now updates local remote-tracking ref so `git status` shows correct state immediately
 - Pull correctly fast-forwards when tracking ref is ahead after previous fetch
 - ResetMode enum extracted to own file (PSR-4 autoloader fix)
 - Reset command shows actual commit hash and message after reset
+- Status blank line after tracking info to match native git output
+- CommitHandler requires user identity configuration (user.name, user.email)
 
 ## [0.1.0] - 2026-02-06
 
