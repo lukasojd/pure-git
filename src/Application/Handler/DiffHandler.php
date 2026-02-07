@@ -8,6 +8,7 @@ use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Diff\DiffAlgorithm;
 use Lukasojd\PureGit\Domain\Diff\FileDiff;
 use Lukasojd\PureGit\Domain\Diff\FileStatus;
+use Lukasojd\PureGit\Domain\Diff\HunkContextLabelResolver;
 use Lukasojd\PureGit\Domain\Object\Blob;
 use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Domain\Object\ObjectId;
@@ -16,10 +17,13 @@ use Lukasojd\PureGit\Domain\Ref\RefName;
 
 final readonly class DiffHandler
 {
+    private HunkContextLabelResolver $contextLabels;
+
     public function __construct(
         private Repository $repository,
         private DiffAlgorithm $diffAlgorithm,
     ) {
+        $this->contextLabels = new HunkContextLabelResolver();
     }
 
     /**
@@ -55,7 +59,7 @@ final readonly class DiffHandler
 
             $oldLines = $this->splitLines($indexBlob->content);
             $newLines = $this->splitLines($workingContent);
-            $hunks = $this->diffAlgorithm->diff($oldLines, $newLines);
+            $hunks = $this->contextLabels->addLabels($this->diffAlgorithm->diff($oldLines, $newLines), $oldLines);
             $newBlob = new Blob($workingContent);
 
             $diffs[] = new FileDiff($path, FileStatus::Modified, $hunks, $entry->objectId, $newBlob->getId());
@@ -192,7 +196,8 @@ final readonly class DiffHandler
             return null;
         }
 
-        $hunks = $this->diffAlgorithm->diff($this->splitLines($blob->content), []);
+        $oldLines = $this->splitLines($blob->content);
+        $hunks = $this->contextLabels->addLabels($this->diffAlgorithm->diff($oldLines, []), $oldLines);
 
         return new FileDiff($path, FileStatus::Deleted, $hunks, oldId: $oldId);
     }
@@ -206,9 +211,10 @@ final readonly class DiffHandler
             return null;
         }
 
-        $hunks = $this->diffAlgorithm->diff(
-            $this->splitLines($oldBlob->content),
-            $this->splitLines($newBlob->content),
+        $oldLines = $this->splitLines($oldBlob->content);
+        $hunks = $this->contextLabels->addLabels(
+            $this->diffAlgorithm->diff($oldLines, $this->splitLines($newBlob->content)),
+            $oldLines,
         );
 
         return new FileDiff($path, FileStatus::Modified, $hunks, $oldId, $newId);

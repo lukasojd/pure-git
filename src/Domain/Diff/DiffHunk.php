@@ -15,6 +15,7 @@ final readonly class DiffHunk
         public int $newStart,
         public int $newCount,
         public array $lines,
+        public ?string $contextLabel = null,
     ) {
     }
 
@@ -23,6 +24,8 @@ final readonly class DiffHunk
         $old = $this->oldCount === 1 ? (string) $this->oldStart : sprintf('%d,%d', $this->oldStart, $this->oldCount);
         $new = $this->newCount === 1 ? (string) $this->newStart : sprintf('%d,%d', $this->newStart, $this->newCount);
 
-        return sprintf('@@ -%s +%s @@', $old, $new);
+        $label = $this->contextLabel !== null ? ' ' . $this->contextLabel : '';
+
+        return sprintf('@@ -%s +%s @@%s', $old, $new, $label);
     }
 }

@@ -399,6 +399,54 @@ final class OutputCompatibilityTest extends TestCase
     }
 
     /**
+     * Bug 13: Hunk context label shows function name after @@.
+     */
+    public function testDiffHunkContextLabelShowsFunctionName(): void
+    {
+        $body = str_repeat("        \$x = 1;\n", 10);
+        $old = "<?php\nclass Example\n{\n    public function handle()\n    {\n" . $body . "        return 1;\n    }\n}\n";
+        $new = "<?php\nclass Example\n{\n    public function handle()\n    {\n" . $body . "        return 1;\n        // added\n    }\n}\n";
+
+        $repo = $this->createRepoWithCommit(['Example.php' => $old]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        file_put_contents($repo->workDir . '/Example.php', $new);
+        $this->commitFiles($repo, ['Example.php'], 'Add line inside function');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $handler->diffCommits($firstId, $secondId);
+
+        self::assertCount(1, $diffs);
+        $hunk = $diffs[0]->hunks[0];
+
+        self::assertNotNull($hunk->contextLabel);
+        self::assertStringContainsString('function handle', $hunk->contextLabel);
+        self::assertStringContainsString('function handle', $hunk->header());
+    }
+
+    public function testDiffHunkContextLabelNullWhenNoMatch(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'data.txt' => "111\n222\n333\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        file_put_contents($repo->workDir . '/data.txt', "111\n222\n333\n444\n");
+        $this->commitFiles($repo, ['data.txt'], 'Append');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $handler->diffCommits($firstId, $secondId);
+
+        self::assertCount(1, $diffs);
+        $hunk = $diffs[0]->hunks[0];
+
+        // Lines are plain numbers — no function/class match
+        self::assertNull($hunk->contextLabel);
+    }
+
+    /**
      * @param array<string, string> $files
      */
     private function createRepoWithCommit(array $files): Repository
