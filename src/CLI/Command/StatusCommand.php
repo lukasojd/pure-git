@@ -37,7 +37,7 @@ final readonly class StatusCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'status';
+        return 'status [-s|--short]';
     }
 
     /**
@@ -45,6 +45,8 @@ final readonly class StatusCommand implements CliCommand
      */
     public function execute(array $args): int
     {
+        $short = in_array('-s', $args, true) || in_array('--short', $args, true);
+
         $cwd = getcwd();
         if ($cwd === false) {
             fwrite(STDERR, "fatal: Cannot determine current directory\n");
@@ -56,6 +58,12 @@ final readonly class StatusCommand implements CliCommand
         $handler = new StatusHandler($repo);
         $result = $handler->handle();
 
+        if ($short) {
+            $this->printShort($result);
+
+            return 0;
+        }
+
         $this->printBranchHeader($repo);
         $this->printStagedChanges($result['staged']);
         $this->printUnstagedChanges($result['unstaged']);
@@ -64,6 +72,57 @@ final readonly class StatusCommand implements CliCommand
         $this->printFooter($result);
 
         return 0;
+    }
+
+    /**
+     * @param array{staged: array<string, FileStatus>, unstaged: array<string, FileStatus>, untracked: list<string>} $result
+     */
+    private function printShort(array $result): void
+    {
+        $paths = $this->mergeShortStatus($result);
+        ksort($paths);
+
+        foreach ($paths as $path => [$x, $y]) {
+            fwrite(STDOUT, sprintf("%s%s %s\n", $x, $y, $path));
+        }
+    }
+
+    /**
+     * @param array{staged: array<string, FileStatus>, unstaged: array<string, FileStatus>, untracked: list<string>} $result
+     * @return array<string, array{string, string}>
+     */
+    private function mergeShortStatus(array $result): array
+    {
+        /** @var array<string, array{string, string}> $paths */
+        $paths = [];
+
+        foreach ($result['staged'] as $path => $status) {
+            $paths[$path] = [$this->shortCode($status), ' '];
+        }
+
+        foreach ($result['unstaged'] as $path => $status) {
+            if (isset($paths[$path])) {
+                $paths[$path][1] = $this->shortCode($status);
+            } else {
+                $paths[$path] = [' ', $this->shortCode($status)];
+            }
+        }
+
+        foreach ($result['untracked'] as $path) {
+            $paths[$path] = ['?', '?'];
+        }
+
+        return $paths;
+    }
+
+    private function shortCode(FileStatus $status): string
+    {
+        return match ($status) {
+            FileStatus::Added => 'A',
+            FileStatus::Modified => 'M',
+            FileStatus::Deleted => 'D',
+            default => '?',
+        };
     }
 
     private function printBranchHeader(Repository $repo): void

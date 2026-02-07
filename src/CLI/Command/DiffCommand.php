@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Lukasojd\PureGit\CLI\Command;
 
 use Lukasojd\PureGit\Application\Handler\DiffHandler;
+use Lukasojd\PureGit\Application\Handler\ShowHandler;
 use Lukasojd\PureGit\Application\Service\Repository;
 use Lukasojd\PureGit\Domain\Diff\FileDiff;
 use Lukasojd\PureGit\Domain\Diff\FileStatus;
+use Lukasojd\PureGit\Domain\Object\Commit;
 use Lukasojd\PureGit\Infrastructure\Diff\MyersDiffAlgorithm;
 
 final class DiffCommand implements CliCommand
@@ -26,7 +28,7 @@ final class DiffCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'diff [--cached]';
+        return 'diff [--cached] [--stat] [--name-only] [<commit>..<commit>]';
     }
 
     /**
@@ -34,7 +36,19 @@ final class DiffCommand implements CliCommand
      */
     public function execute(array $args): int
     {
-        $cached = in_array('--cached', $args, true) || in_array('--staged', $args, true);
+        $cached = false;
+        $stat = false;
+        $nameOnly = false;
+        $positional = [];
+
+        foreach ($args as $arg) {
+            match ($arg) {
+                '--cached', '--staged' => $cached = true,
+                '--stat' => $stat = true,
+                '--name-only' => $nameOnly = true,
+                default => $positional[] = $arg,
+            };
+        }
 
         $cwd = getcwd();
         if ($cwd === false) {
@@ -45,12 +59,9 @@ final class DiffCommand implements CliCommand
 
         $repo = Repository::discover($cwd);
         $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $this->resolveDiffs($handler, $repo, $cached, $positional);
 
-        $diffs = $cached ? $handler->diffIndexVsHead() : $handler->diffWorkingVsIndex();
-
-        foreach ($diffs as $diff) {
-            $this->printFileDiff($diff);
-        }
+        $this->printOutput($diffs, $stat, $nameOnly);
 
         return 0;
     }
@@ -69,6 +80,62 @@ final class DiffCommand implements CliCommand
                 fwrite(STDOUT, sprintf("%s%s\n", $line->type->value, $line->content));
             }
         }
+    }
+
+    /**
+     * @param list<FileDiff> $diffs
+     */
+    private function printOutput(array $diffs, bool $stat, bool $nameOnly): void
+    {
+        if ($nameOnly) {
+            foreach ($diffs as $diff) {
+                fwrite(STDOUT, $diff->path . "\n");
+            }
+        } elseif ($stat) {
+            new DiffStatPrinter()->print($diffs);
+        } else {
+            foreach ($diffs as $diff) {
+                $this->printFileDiff($diff);
+            }
+        }
+    }
+
+    /**
+     * @param list<string> $positional
+     * @return list<FileDiff>
+     */
+    private function resolveDiffs(DiffHandler $handler, Repository $repo, bool $cached, array $positional): array
+    {
+        if ($positional !== []) {
+            return $this->diffBetweenRefs($handler, $repo, $positional[0]);
+        }
+
+        return $cached ? $handler->diffIndexVsHead() : $handler->diffWorkingVsIndex();
+    }
+
+    /**
+     * @return list<FileDiff>
+     */
+    private function diffBetweenRefs(DiffHandler $handler, Repository $repo, string $refSpec): array
+    {
+        $parts = explode('..', $refSpec, 2);
+        if (count($parts) !== 2) {
+            fwrite(STDERR, sprintf("fatal: unrecognized argument: %s\n", $refSpec));
+
+            return [];
+        }
+
+        $showHandler = new ShowHandler($repo);
+        $oldObj = $showHandler->handle($parts[0]);
+        $newObj = $showHandler->handle($parts[1]);
+
+        if (! $oldObj instanceof Commit || ! $newObj instanceof Commit) {
+            fwrite(STDERR, "fatal: arguments must be commits\n");
+
+            return [];
+        }
+
+        return $handler->diffCommits($oldObj->getId(), $newObj->getId());
     }
 
     private function printModeAndIndex(FileDiff $diff): void

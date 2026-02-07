@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Lukasojd\PureGit\Tests\Functional;
 
 use Lukasojd\PureGit\Application\Handler\AddHandler;
+use Lukasojd\PureGit\Application\Handler\BranchHandler;
 use Lukasojd\PureGit\Application\Handler\CheckoutHandler;
 use Lukasojd\PureGit\Application\Handler\CommitHandler;
 use Lukasojd\PureGit\Application\Handler\DiffHandler;
+use Lukasojd\PureGit\Application\Handler\LogHandler;
 use Lukasojd\PureGit\Application\Handler\MergeHandler;
 use Lukasojd\PureGit\Application\Handler\MergeResult;
 use Lukasojd\PureGit\Application\Handler\ResetHandler;
@@ -25,6 +27,7 @@ use Lukasojd\PureGit\Domain\Object\ObjectId;
 use Lukasojd\PureGit\Domain\Object\PersonInfo;
 use Lukasojd\PureGit\Domain\Object\Tag;
 use Lukasojd\PureGit\Domain\Ref\RefName;
+use Lukasojd\PureGit\Infrastructure\Config\GitConfigReader;
 use Lukasojd\PureGit\Infrastructure\Diff\MyersDiffAlgorithm;
 use PHPUnit\Framework\TestCase;
 
@@ -407,7 +410,9 @@ final class OutputCompatibilityTest extends TestCase
         $old = "<?php\nclass Example\n{\n    public function handle()\n    {\n" . $body . "        return 1;\n    }\n}\n";
         $new = "<?php\nclass Example\n{\n    public function handle()\n    {\n" . $body . "        return 1;\n        // added\n    }\n}\n";
 
-        $repo = $this->createRepoWithCommit(['Example.php' => $old]);
+        $repo = $this->createRepoWithCommit([
+            'Example.php' => $old,
+        ]);
         $firstId = $repo->refs->resolve(RefName::head());
 
         file_put_contents($repo->workDir . '/Example.php', $new);
@@ -444,6 +449,338 @@ final class OutputCompatibilityTest extends TestCase
 
         // Lines are plain numbers — no function/class match
         self::assertNull($hunk->contextLabel);
+    }
+
+    // ========= log --oneline =========
+
+    public function testLogOnelineFormat(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "v1\n",
+        ]);
+
+        file_put_contents($repo->workDir . '/file.txt', "v2\n");
+        $this->commitFiles($repo, ['file.txt'], 'Second commit');
+
+        $handler = new LogHandler($repo);
+        $commits = $handler->handle(10);
+
+        self::assertCount(2, $commits);
+        foreach ($commits as $commit) {
+            $short = $commit->getId()->short(7);
+            self::assertSame(7, strlen($short));
+            $firstLine = strstr($commit->message, "\n", true);
+            $expected = $firstLine !== false ? $firstLine : rtrim($commit->message);
+            self::assertNotEmpty($expected);
+        }
+    }
+
+    // ========= log --all =========
+
+    public function testLogAllShowsCommitsFromAllBranches(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "main\n",
+        ]);
+
+        // Create feature branch with extra commit
+        $checkout = new CheckoutHandler($repo);
+        $checkout->checkoutNewBranch('feature');
+        file_put_contents($repo->workDir . '/feature.txt', "feature\n");
+        $this->commitFiles($repo, ['feature.txt'], 'Feature commit');
+
+        // Go back to main
+        $checkout->checkout('main');
+
+        // log from HEAD only sees main commits (1)
+        $handler = new LogHandler($repo);
+        $headOnly = $handler->handle(10);
+        self::assertCount(1, $headOnly);
+
+        // log --all sees both branches (2 commits)
+        $allCommits = $handler->handle(10, all: true);
+        self::assertCount(2, $allCommits);
+    }
+
+    // ========= diff <commit>..<commit> =========
+
+    public function testDiffBetweenTwoCommits(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "original\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        file_put_contents($repo->workDir . '/file.txt', "modified\n");
+        $this->commitFiles($repo, ['file.txt'], 'Modify');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $handler->diffCommits($firstId, $secondId);
+
+        self::assertCount(1, $diffs);
+        self::assertSame('file.txt', $diffs[0]->path);
+        self::assertSame(FileStatus::Modified, $diffs[0]->status);
+    }
+
+    // ========= diff --stat =========
+
+    public function testDiffStatCountsInsertionsAndDeletions(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "line1\nline2\nline3\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        file_put_contents($repo->workDir . '/file.txt', "line1\nchanged\nline3\nnew\n");
+        $this->commitFiles($repo, ['file.txt'], 'Change');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $handler->diffCommits($firstId, $secondId);
+
+        self::assertCount(1, $diffs);
+        $added = 0;
+        $removed = 0;
+        foreach ($diffs[0]->hunks as $hunk) {
+            foreach ($hunk->lines as $line) {
+                if ($line->type === DiffLineType::Added) {
+                    $added++;
+                } elseif ($line->type === DiffLineType::Removed) {
+                    $removed++;
+                }
+            }
+        }
+        self::assertGreaterThan(0, $added);
+        self::assertGreaterThan(0, $removed);
+    }
+
+    // ========= diff --name-only =========
+
+    public function testDiffNameOnlyReturnsPaths(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'a.txt' => "aaa\n",
+            'b.txt' => "bbb\n",
+        ]);
+        $firstId = $repo->refs->resolve(RefName::head());
+
+        file_put_contents($repo->workDir . '/a.txt', "aaa-modified\n");
+        file_put_contents($repo->workDir . '/b.txt', "bbb-modified\n");
+        $this->commitFiles($repo, ['a.txt', 'b.txt'], 'Modify both');
+        $secondId = $repo->refs->resolve(RefName::head());
+
+        $handler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $handler->diffCommits($firstId, $secondId);
+
+        $paths = array_map(static fn (FileDiff $d): string => $d->path, $diffs);
+        sort($paths);
+        self::assertSame(['a.txt', 'b.txt'], $paths);
+    }
+
+    // ========= status -s/--short =========
+
+    public function testStatusShortFormat(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'tracked.txt' => "content\n",
+        ]);
+
+        // Modify tracked file (unstaged)
+        file_put_contents($repo->workDir . '/tracked.txt', "changed\n");
+
+        // Add untracked file
+        file_put_contents($repo->workDir . '/untracked.txt', "new\n");
+
+        // Add new file to index (staged)
+        file_put_contents($repo->workDir . '/staged.txt', "staged\n");
+        $add = new AddHandler($repo);
+        $add->handle(['staged.txt']);
+
+        $handler = new StatusHandler($repo);
+        $result = $handler->handle();
+
+        // staged.txt should be staged as Added
+        self::assertArrayHasKey('staged.txt', $result['staged']);
+        self::assertSame(FileStatus::Added, $result['staged']['staged.txt']);
+
+        // tracked.txt should be unstaged as Modified
+        self::assertArrayHasKey('tracked.txt', $result['unstaged']);
+        self::assertSame(FileStatus::Modified, $result['unstaged']['tracked.txt']);
+
+        // untracked.txt should be untracked
+        self::assertContains('untracked.txt', $result['untracked']);
+    }
+
+    // ========= show --stat =========
+
+    public function testShowStatShowsCommitWithDiffStats(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
+
+        $handler = new ShowHandler($repo);
+        $object = $handler->handle();
+
+        self::assertInstanceOf(Commit::class, $object);
+        // The commit has files — verify diff works
+        $diffHandler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $diffHandler->diffRootCommit($object->getId());
+        self::assertNotEmpty($diffs);
+    }
+
+    // ========= show --name-only =========
+
+    public function testShowNameOnlyListsChangedFiles(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'a.txt' => "aaa\n",
+            'b.txt' => "bbb\n",
+        ]);
+
+        $handler = new ShowHandler($repo);
+        $commit = $handler->handle();
+        self::assertInstanceOf(Commit::class, $commit);
+
+        $diffHandler = new DiffHandler($repo, new MyersDiffAlgorithm());
+        $diffs = $diffHandler->diffRootCommit($commit->getId());
+        $paths = array_map(static fn (FileDiff $d): string => $d->path, $diffs);
+        sort($paths);
+        self::assertSame(['a.txt', 'b.txt'], $paths);
+    }
+
+    // ========= branch -m (rename) =========
+
+    public function testBranchRename(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
+
+        $branchHandler = new BranchHandler($repo);
+        $branchHandler->create('old-name');
+        self::assertArrayHasKey('refs/heads/old-name', $branchHandler->list());
+
+        $branchHandler->rename('old-name', 'new-name');
+
+        $branches = $branchHandler->list();
+        self::assertArrayNotHasKey('refs/heads/old-name', $branches);
+        self::assertArrayHasKey('refs/heads/new-name', $branches);
+    }
+
+    public function testBranchRenameCurrentBranchUpdatesHead(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
+
+        $branchHandler = new BranchHandler($repo);
+        // Current branch is 'main'
+        $current = $branchHandler->getCurrentBranch();
+        self::assertInstanceOf(RefName::class, $current);
+        self::assertSame('main', $current->shortName());
+
+        $branchHandler->rename('main', 'trunk');
+        $newCurrent = $branchHandler->getCurrentBranch();
+        self::assertInstanceOf(RefName::class, $newCurrent);
+        self::assertSame('trunk', $newCurrent->shortName());
+    }
+
+    public function testBranchRenameMigratesTrackingConfig(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
+
+        // Set up tracking on 'main'
+        $branchHandler = new BranchHandler($repo);
+        $branchHandler->create('feature');
+
+        // Manually set tracking config for 'feature'
+        $configPath = $repo->gitDir . '/config';
+        $writer = new \Lukasojd\PureGit\Infrastructure\Config\GitConfigWriter();
+        $writer->set($configPath, 'branch "feature"', 'remote', 'origin');
+        $writer->set($configPath, 'branch "feature"', 'merge', 'refs/heads/feature');
+
+        $branchHandler->rename('feature', 'feat-new');
+
+        $config = new GitConfigReader($configPath);
+        self::assertNull($config->get('branch "feature"', 'remote'));
+        self::assertSame('origin', $config->get('branch "feat-new"', 'remote'));
+        self::assertSame('refs/heads/feature', $config->get('branch "feat-new"', 'merge'));
+    }
+
+    // ========= branch -a (list all) =========
+
+    public function testBranchListRemote(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
+
+        // Create a fake remote-tracking ref
+        $headId = $repo->refs->resolve(RefName::head());
+        $repo->refs->updateRef(RefName::fromString('refs/remotes/origin/main'), $headId);
+
+        $branchHandler = new BranchHandler($repo);
+        $remotes = $branchHandler->listRemote();
+        self::assertArrayHasKey('refs/remotes/origin/main', $remotes);
+    }
+
+    // ========= branch --set-upstream-to =========
+
+    public function testBranchSetUpstreamTo(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => 'content',
+        ]);
+
+        // Create remote tracking ref
+        $headId = $repo->refs->resolve(RefName::head());
+        $repo->refs->updateRef(RefName::fromString('refs/remotes/origin/main'), $headId);
+
+        $branchHandler = new BranchHandler($repo);
+        $branchHandler->setUpstreamTo('origin/main');
+
+        $config = new GitConfigReader($repo->gitDir . '/config');
+        self::assertSame('origin', $config->get('branch "main"', 'remote'));
+        self::assertSame('refs/heads/main', $config->get('branch "main"', 'merge'));
+    }
+
+    // ========= checkout -- <file> =========
+
+    public function testCheckoutRestoreFileFromHead(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "original\n",
+        ]);
+
+        // Modify the file
+        file_put_contents($repo->workDir . '/file.txt', "modified\n");
+        self::assertSame("modified\n", file_get_contents($repo->workDir . '/file.txt'));
+
+        // Restore from HEAD
+        $handler = new CheckoutHandler($repo);
+        $handler->restoreFile('file.txt');
+
+        self::assertSame("original\n", file_get_contents($repo->workDir . '/file.txt'));
+    }
+
+    public function testCheckoutRestoreDeletedFile(): void
+    {
+        $repo = $this->createRepoWithCommit([
+            'file.txt' => "content\n",
+        ]);
+
+        unlink($repo->workDir . '/file.txt');
+        self::assertFileDoesNotExist($repo->workDir . '/file.txt');
+
+        $handler = new CheckoutHandler($repo);
+        $handler->restoreFile('file.txt');
+
+        self::assertFileExists($repo->workDir . '/file.txt');
+        self::assertSame("content\n", file_get_contents($repo->workDir . '/file.txt'));
     }
 
     /**

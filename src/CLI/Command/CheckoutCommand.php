@@ -23,7 +23,7 @@ final class CheckoutCommand implements CliCommand
 
     public function usage(): string
     {
-        return 'checkout [-b <new-branch>] <branch|commit>';
+        return 'checkout [-b <new-branch>] [-- <file>...] <branch|commit>';
     }
 
     /**
@@ -47,23 +47,59 @@ final class CheckoutCommand implements CliCommand
         $repo = Repository::discover($cwd);
         $handler = new CheckoutHandler($repo);
 
-        if ($args[0] === '-b') {
-            if (! isset($args[1])) {
-                fwrite(STDERR, "error: switch 'b' requires a value\n");
+        return $this->dispatch($handler, $repo, $args);
+    }
 
-                return 1;
-            }
-
-            $startPoint = $args[2] ?? null;
-            $result = $handler->checkoutNewBranch($args[1], $startPoint);
-            $this->printResult($result, $args[1], $repo);
-
+    /**
+     * @param list<string> $args
+     */
+    private function dispatch(CheckoutHandler $handler, Repository $repo, array $args): int
+    {
+        if ($this->tryRestoreFiles($handler, $args)) {
             return 0;
         }
 
-        $result = $handler->checkout($args[0]);
+        if ($args[0] === '-b') {
+            return $this->handleNewBranch($handler, $repo, $args);
+        }
 
+        $result = $handler->checkout($args[0]);
         $this->printResult($result, $args[0], $repo);
+
+        return 0;
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function tryRestoreFiles(CheckoutHandler $handler, array $args): bool
+    {
+        $dashDash = array_search('--', $args, true);
+        if ($dashDash === false || ! isset($args[$dashDash + 1])) {
+            return false;
+        }
+
+        for ($i = $dashDash + 1, $iMax = count($args); $i < $iMax; $i++) {
+            $handler->restoreFile($args[$i]);
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function handleNewBranch(CheckoutHandler $handler, Repository $repo, array $args): int
+    {
+        if (! isset($args[1])) {
+            fwrite(STDERR, "error: switch 'b' requires a value\n");
+
+            return 1;
+        }
+
+        $startPoint = $args[2] ?? null;
+        $result = $handler->checkoutNewBranch($args[1], $startPoint);
+        $this->printResult($result, $args[1], $repo);
 
         return 0;
     }

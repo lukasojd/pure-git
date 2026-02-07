@@ -19,14 +19,15 @@ final readonly class LogHandler
     /**
      * @return list<Commit>
      */
-    public function handle(int $maxCount = 20, ?string $fromRef = null): array
+    public function handle(int $maxCount = 20, ?string $fromRef = null, bool $all = false): array
     {
-        $ref = $fromRef !== null ? RefName::fromString($fromRef) : RefName::head();
-        $commitId = $this->repository->refs->resolve($ref);
+        $startIds = $all ? $this->allRefIds() : [$this->repository->refs->resolve(
+            $fromRef !== null ? RefName::fromString($fromRef) : RefName::head(),
+        )];
 
         $commits = [];
         $seen = [];
-        $queue = [$commitId];
+        $queue = $startIds;
 
         while ($queue !== [] && count($commits) < $maxCount) {
             $id = array_shift($queue);
@@ -44,7 +45,28 @@ final readonly class LogHandler
             $this->enqueueUnseen($commit->parents, $seen, $queue);
         }
 
+        usort($commits, static fn (Commit $a, Commit $b): int => $b->author->timestamp->getTimestamp() - $a->author->timestamp->getTimestamp());
+
         return $commits;
+    }
+
+    /**
+     * @return list<ObjectId>
+     */
+    private function allRefIds(): array
+    {
+        $allRefs = $this->repository->refs->listRefs('refs/');
+        $ids = [];
+        $seen = [];
+
+        foreach ($allRefs as $id) {
+            if (! isset($seen[$id->hash])) {
+                $seen[$id->hash] = true;
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
     }
 
     private function readCommit(ObjectId $id): ?Commit

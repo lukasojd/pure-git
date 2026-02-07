@@ -39,6 +39,63 @@ final readonly class BranchHandler
         return $this->repository->refs->listRefs('refs/heads/');
     }
 
+    public function rename(string $oldName, string $newName): void
+    {
+        $oldRef = RefName::branch($oldName);
+        $newRef = RefName::branch($newName);
+
+        if (! $this->repository->refs->exists($oldRef)) {
+            throw new PureGitException(sprintf('Branch not found: %s', $oldName));
+        }
+
+        if ($this->repository->refs->exists($newRef)) {
+            throw new PureGitException(sprintf('Branch already exists: %s', $newName));
+        }
+
+        $id = $this->repository->refs->resolve($oldRef);
+        $this->repository->refs->updateRef($newRef, $id);
+        $this->repository->refs->deleteRef($oldRef);
+
+        // Update HEAD if renaming the current branch
+        $currentBranch = $this->getCurrentBranch();
+        if ($currentBranch instanceof RefName && $currentBranch->equals($oldRef)) {
+            $this->repository->refs->updateSymbolicRef(RefName::head(), $newRef);
+        }
+
+        // Migrate tracking config
+        $this->migrateTrackingConfig($oldName, $newName);
+    }
+
+    /**
+     * @return array<string, ObjectId>
+     */
+    public function listRemote(): array
+    {
+        return $this->repository->refs->listRefs('refs/remotes/');
+    }
+
+    public function setUpstreamTo(string $upstream, ?string $branchName = null): void
+    {
+        if ($branchName === null) {
+            $current = $this->getCurrentBranch();
+            if (! $current instanceof RefName) {
+                throw new PureGitException('HEAD is not on a branch');
+            }
+            $branchName = $current->shortName();
+        }
+
+        if (! str_contains($upstream, '/')) {
+            throw new PureGitException(sprintf('Not a valid upstream: %s', $upstream));
+        }
+
+        $parts = explode('/', $upstream, 2);
+        $configPath = $this->repository->gitDir . '/config';
+        $section = 'branch "' . $branchName . '"';
+        $writer = new GitConfigWriter();
+        $writer->set($configPath, $section, 'remote', $parts[0]);
+        $writer->set($configPath, $section, 'merge', 'refs/heads/' . $parts[1]);
+    }
+
     public function delete(string $name): void
     {
         $ref = RefName::branch($name);
@@ -158,5 +215,25 @@ final readonly class BranchHandler
         }
 
         return $visited;
+    }
+
+    private function migrateTrackingConfig(string $oldName, string $newName): void
+    {
+        $configPath = $this->repository->gitDir . '/config';
+        $config = new GitConfigReader($configPath);
+        $oldSection = 'branch "' . $oldName . '"';
+        $remote = $config->get($oldSection, 'remote');
+        $merge = $config->get($oldSection, 'merge');
+
+        if ($remote === null || $merge === null) {
+            return;
+        }
+
+        $writer = new GitConfigWriter();
+        $newSection = 'branch "' . $newName . '"';
+        $writer->set($configPath, $newSection, 'remote', $remote);
+        $writer->set($configPath, $newSection, 'merge', $merge);
+        $writer->unsetKey($configPath, $oldSection, 'remote');
+        $writer->unsetKey($configPath, $oldSection, 'merge');
     }
 }
