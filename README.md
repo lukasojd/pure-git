@@ -28,21 +28,31 @@ bin/puregit commit -m "Your commit message"
 
 # Show status
 bin/puregit status
+bin/puregit status -s               # short format (XY path)
 
 # View commit history
 bin/puregit log [-n <count>]
+bin/puregit log --oneline           # short hash + first line
+bin/puregit log --all               # all refs, not just HEAD
 
 # Show diff
 bin/puregit diff [--cached]
+bin/puregit diff --stat             # diffstat summary
+bin/puregit diff --name-only        # just file paths
+bin/puregit diff <commit>..<commit> # between two commits
 
 # Branch operations
 bin/puregit branch                  # list branches
+bin/puregit branch -a               # list local + remote branches
 bin/puregit branch <name>           # create branch
 bin/puregit branch -d <name>        # delete branch
+bin/puregit branch -m <old> <new>   # rename branch
+bin/puregit branch --set-upstream-to=origin/main
 bin/puregit branch --unset-upstream # remove upstream tracking
 
 # Switch branches
 bin/puregit checkout <branch>
+bin/puregit checkout -- <file>      # restore file from HEAD
 
 # Tag operations
 bin/puregit tag                     # list tags
@@ -62,6 +72,8 @@ bin/puregit reset --hard feature~2
 
 # Show object
 bin/puregit show [<object>]
+bin/puregit show --stat             # commit with diffstat
+bin/puregit show --name-only        # commit with file list only
 
 # Clone a repository (SSH, HTTP/HTTPS, or git:// protocol)
 bin/puregit clone <url> [<directory>]

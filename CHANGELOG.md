@@ -29,6 +29,19 @@
 - Push `-u`/`--set-upstream` flag for configuring upstream tracking
 - ConfigHandler replaces duplicated config parsing in CommitHandler
 - Unit tests for config, push, branch, tracking info (227 tests, 660 assertions)
+- Hunk context labels in diff output — `@@ -2,3 +2,4 @@ public function handle()`
+- `log --oneline` — compact one-line format (short hash + first line of message)
+- `log --all` — walk all refs, not just HEAD
+- `diff <commit>..<commit>` — compare two arbitrary commits
+- `diff --stat` — diffstat summary (file-level insertions/deletions bar graph)
+- `diff --name-only` — list only changed file paths
+- `status -s`/`--short` — compact XY format (`M`, `A`, `D`, `??`)
+- `show --stat` — commit with diffstat summary
+- `show --name-only` — commit with file list only
+- `branch -m <old> <new>` — rename branch (migrates tracking config, updates HEAD)
+- `branch -a` — list local and remote-tracking branches
+- `branch --set-upstream-to=<upstream>` — configure upstream tracking
+- `checkout -- <file>` — restore file from HEAD (single file or multiple)
 
 ### Fixed
 - Push crashes when remote has branches not fetched locally ("Object not found")
