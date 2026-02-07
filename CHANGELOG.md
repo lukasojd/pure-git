@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-07
+
 ### Added
 - SSH transport (phpseclib) for clone, fetch, push
 - HTTP/HTTPS smart transport (ext-curl) for clone, fetch, push
