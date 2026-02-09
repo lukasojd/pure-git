@@ -209,9 +209,11 @@ Acceptance tests run automatically in GitHub Actions CI after the QA pipeline pa
 
 ## Performance
 
-Optimized for real-world working tree operations. PureGit's core algorithms are competitive with — and in many cases faster than — native git, with the CLI overhead dominated by PHP interpreter startup (~52 ms fixed cost).
+Optimized for real-world working tree operations. PureGit's core algorithms are faster than native git on most operations, with the CLI overhead dominated by PHP interpreter startup (~43 ms fixed cost).
 
 Delta encoding with sliding window (window=10, max depth=50) achieves ~77% compression ratio on similar objects. Packs use OFS_DELTA format. Transport streams packs directly to disk with a bounded FIFO cache (32 MB) for index building, keeping memory usage predictable regardless of repository size.
+
+All benchmarks run with `xdebug.mode=off`. Xdebug develop mode adds 50–100% overhead — always disable for production.
 
 ### Working tree operations
 
@@ -219,13 +221,13 @@ Benchmarked on a real-world PHP project (1 056 files, 21 gitignore rules):
 
 | Operation | PureGit | Native git | |
 |---|---|---|---|
-| `status` | 12 ms | 19 ms | 1.5x faster |
-| `diff` | 6 ms | 13 ms | 2.2x faster |
-| `diff --cached` | 3 ms | 12 ms | 4.6x faster |
-| `log -10` | < 0.1 ms | 11 ms | > 100x faster |
-| `show HEAD` | < 0.1 ms | 12 ms | > 100x faster |
+| `status` | 11 ms | 22 ms | 2x faster |
+| `diff` | 3 ms | 18 ms | 6x faster |
+| `diff --cached` | 1 ms | 15 ms | 13x faster |
+| `log -10` | < 0.1 ms | 13 ms | > 100x faster |
+| `show HEAD` | < 0.1 ms | 15 ms | > 100x faster |
 
-PureGit times are handler-level (warm cache). Native git times are `exec()`-based (include ~12 ms process startup). CLI wall-clock adds ~52 ms PHP interpreter startup on top.
+PureGit times are handler-level (warm cache). Native git times are `exec()`-based (include ~12 ms process startup). CLI wall-clock adds ~43 ms PHP interpreter startup on top.
 
 ### Bare repository operations
 
@@ -233,20 +235,20 @@ Benchmarked against PHPUnit bare repository (231 MB, 27k commits, 3 576 files):
 
 | Operation | PureGit | Native git | |
 |---|---|---|---|
-| Resolve HEAD | 0.1 ms | 12 ms | 120x faster |
-| List all refs (995) | 0.2 ms | 15 ms | 65x faster |
-| Log 100 commits | 3 ms | 15 ms | 4x faster |
-| Walk HEAD tree (3 576 files) | 8 ms | 16 ms | 2x faster |
-| Log 1 000 commits | 27 ms | 22 ms | 1.2x slower |
-| Count all commits (BFS) | 289 ms | 128 ms | 2.2x slower |
-| Count all commits (commit-graph) | 2 ms | 119 ms | 60x faster |
+| Resolve HEAD | < 0.1 ms | 13 ms | > 100x faster |
+| List all refs (995) | 0.1 ms | 15 ms | 103x faster |
+| Log 100 commits | 2 ms | 15 ms | 10x faster |
+| Walk HEAD tree (3 576 files) | 3 ms | 16 ms | 5x faster |
+| Log 1 000 commits | 11 ms | 22 ms | 2x faster |
+| Count all commits (BFS) | 146 ms | 119 ms | 1.2x slower |
+| Count all commits (commit-graph) | 2 ms | 116 ms | 59x faster |
 
 ### Scale: Linux kernel (6.1 GB, 1.4M commits)
 
 | Operation | PureGit | Native git | |
 |---|---|---|---|
-| Count all commits (BFS) | 27 s | 8 s | 3.4x slower |
-| Count all commits (commit-graph) | 109 ms | — | — |
+| Count all commits (BFS) | 17 s | 7 s | 2.3x slower |
+| Count all commits (commit-graph) | 124 ms | — | — |
 | Peak memory (BFS) | 2 087 MB | — | — |
 
 ### Clone (HTTP transport)
